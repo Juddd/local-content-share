@@ -151,10 +151,10 @@
                         <div class="flex items-start justify-between gap-2 mb-2">
                             <div class="font-semibold text-text break-all min-w-0">{{.Filename}}</div>
                             <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
-                            <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Rename"><i class="fas fa-i-cursor"></i></button>
-                            <button onclick="event.stopPropagation(); showEditForm('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Edit"><i class="fas fa-pen"></i></button>
-                            <button onclick="event.stopPropagation(); copyToClipboard(this.closest('[data-snippet-row]').querySelector('[data-snippet-full]').textContent, this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy"><i class="fas fa-copy"></i></button>
-                            <button onclick="event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
+                            <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="重命名"><i class="fas fa-i-cursor"></i></button>
+                            <button onclick="event.stopPropagation(); showEditForm('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="编辑"><i class="fas fa-pen"></i></button>
+                            <button onclick="event.stopPropagation(); copyToClipboard(this.closest('[data-snippet-row]').querySelector('[data-snippet-full]').textContent, this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="复制"><i class="fas fa-copy"></i></button>
+                            <button onclick="event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="删除"><i class="fas fa-trash"></i></button>
                             </div>
                         </div>
                         <div data-snippet-content class="w-full whitespace-pre-wrap break-all text-subtext0{{if isTruncated .Content 600}} cursor-pointer{{end}}"{{if isTruncated .Content 600}} onclick="showViewModal('{{.ID}}', '{{.Filename}}')" title="点击查看全文"{{end}}>{{previewText .Content 600}}{{if isTruncated .Content 600}}… <span class="text-blue text-sm whitespace-nowrap">点击查看全文</span>{{end}}</div>
@@ -172,11 +172,11 @@
                     <div data-file-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
                         <div class="font-medium truncate text-text mr-2">{{.Filename}}</div>
                         <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
-                            <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Rename"><i class="fas fa-i-cursor"></i></button>
-                            <a href="/download/{{.ID}}" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="Download"><i class="fas fa-download"></i></a>
-                            <a data-file-view href="/view/{{.ID}}" target="_blank" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="View"><i class="fas fa-eye"></i></a>
-                            <button onclick="event.stopPropagation(); copyFileUrl(this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy file URL"><i class="fas fa-link"></i></button>
-                            <button onclick="event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
+                            <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="重命名"><i class="fas fa-i-cursor"></i></button>
+                            <a href="/download/{{.ID}}" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="下载"><i class="fas fa-download"></i></a>
+                            <a data-file-view href="/view/{{.ID}}" target="_blank" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="查看"><i class="fas fa-eye"></i></a>
+                            <button onclick="event.stopPropagation(); copyFileUrl(this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="复制文件地址"><i class="fas fa-link"></i></button>
+                            <button onclick="event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="删除"><i class="fas fa-trash"></i></button>
                         </div>
                     </div>
                     {{end}}{{end}}
@@ -218,17 +218,17 @@
                     <label for="file-upload" class="flex flex-col items-center justify-center w-full h-32 border-2 border-surface0 border-dashed rounded-2xl cursor-pointer bg-base hover:bg-surface0 transition-all">
                         <div class="flex flex-col items-center justify-center pt-5 pb-6">
                             <i class="fas fa-cloud-upload-alt text-3xl text-overlay2 mb-2"></i>
-                            <p class="text-sm text-overlay2"><span class="font-semibold">Click to upload</span>, drag & drop, or paste</p>
+                            <p class="text-sm text-overlay2"><span class="font-semibold">点击上传</span>，或拖拽、粘贴文件</p>
                             <p id="file-name-display" class="text-xs text-blue mt-2 font-medium"></p>
                         </div>
                         <input id="file-upload" name="file-upload" type="file" class="hidden" multiple />
                     </label>
                 </div>
                 <div class="mb-4">
-                     <input type="text" name="name" placeholder="Name (optional)" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl">
+                     <input type="text" name="name" placeholder="名称（可选）" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl">
                 </div>
                 <div>
-                    <textarea name="content" placeholder="Content (uploaded files are prioritized when both are provided)" rows="4" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none resize-y rounded-2xl"></textarea>
+                    <textarea name="content" placeholder="正文（同时提供文件和正文时优先使用文件）" rows="4" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none resize-y rounded-2xl"></textarea>
                 </div>
                 <div id="progress-container" class="w-full bg-surface0 rounded-full h-2.5 my-4 hidden">
                     <div id="progress-bar" class="bg-blue h-2.5 rounded-full" style="width: 0%"></div>
@@ -236,10 +236,10 @@
                 <div class="grid grid-cols-3 gap-3 mt-3">
                     <button type="button" id="expiry-button" class="flex items-center justify-center gap-2 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors">
                         <i class="fas fa-clock text-subtext0"></i>
-                        <span id="expiry-text" class="font-medium text-sm text-subtext0">Never</span>
+                        <span id="expiry-text" class="font-medium text-sm text-subtext0">永不过期</span>
                     </button>
-                    <button type="button" id="cancel-button" class="py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium text-sm">Cancel</button>
-                    <button type="submit" class="py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors text-sm">Submit</button>
+                    <button type="button" id="cancel-button" class="py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium text-sm">取消</button>
+                    <button type="submit" class="py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors text-sm">提交</button>
                 </div>
             </form>
         </div>
@@ -255,8 +255,8 @@
                 <input type="text" name="name" required placeholder="Title" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl mb-3">
                 <input type="url" name="content" required placeholder="https://example.com" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl mb-6">
                 <div class="flex justify-end gap-4">
-                    <button type="button" id="link-cancel-button" class="px-4 py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium">Cancel</button>
-                    <button type="submit" class="px-4 py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors">Submit</button>
+                    <button type="button" id="link-cancel-button" class="px-4 py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium">取消</button>
+                    <button type="submit" class="px-4 py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors">提交</button>
                 </div>
             </form>
         </div>
@@ -271,7 +271,7 @@
             <form id="rename-form" method="POST">
                 <input type="text" id="new-name-input" name="newname" required placeholder="Enter new name" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl mb-6">
                 <div class="flex justify-end gap-4">
-                    <button type="button" id="rename-cancel-button" class="px-4 py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium">Cancel</button>
+                    <button type="button" id="rename-cancel-button" class="px-4 py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium">取消</button>
                     <button type="submit" class="px-4 py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors">Rename</button>
                 </div>
             </form>
@@ -287,7 +287,7 @@
                 <pre id="view-snippet-content" class="text-text whitespace-pre-wrap break-words"></pre>
             </div>
             <div class="flex justify-end gap-4">
-                <button type="button" id="view-copy-button" class="px-4 py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors">Copy</button>
+                <button type="button" id="view-copy-button" class="px-4 py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors">复制</button>
                 <button type="button" id="view-close-button" class="px-4 py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium">Close</button>
             </div>
         </div>
@@ -299,8 +299,8 @@
             <h3 id="confirmation-title" class="text-lg font-medium text-text mb-4">Are you sure?</h3>
             <p id="confirmation-message" class="text-sm text-subtext1 mb-6">Do you really want to delete this item? This process cannot be undone.</p>
             <div class="flex justify-center gap-4">
-                <button id="confirm-cancel-button" class="px-4 py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium">Cancel</button>
-                <button id="confirm-action-button" class="px-4 py-2 bg-red hover:bg-maroon text-crust font-semibold rounded-xl transition-colors">Delete</button>
+                <button id="confirm-cancel-button" class="px-4 py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium">取消</button>
+                <button id="confirm-action-button" class="px-4 py-2 bg-red hover:bg-maroon text-crust font-semibold rounded-xl transition-colors">删除</button>
             </div>
         </div>
     </div>
@@ -420,20 +420,21 @@
         const expiryButton = document.getElementById('expiry-button');
         const expiryText = document.getElementById('expiry-text');
         const expiryValueInput = document.getElementById('expiryValue');
+        const expiryLabels = { Never: '永不过期', Custom: '自定义' };
+        const formatExpiry = value => expiryLabels[value] || value;
         expiryButton.addEventListener('click', () => {
             if (expiryOptions.length === 0) return;
-            const currentText = expiryText.innerText;
-            const currentIndex = expiryOptions.indexOf(currentText);
+            const currentIndex = expiryOptions.indexOf(expiryValueInput.value);
             const nextIndex = (currentIndex === -1) ? 0 : (currentIndex + 1) % expiryOptions.length;
             const newValue = expiryOptions[nextIndex];
             if (newValue === "Custom") {
-                const customValue = prompt("Enter a custom expiration time (e.g., 1h, 30m, 2d, 1w, 1M, 1y):");
+                const customValue = prompt("请输入自定义过期时间（例如：1h、30m、2d、1w、1M、1y）：");
                 if (customValue) {
                     expiryText.innerText = customValue;
                     expiryValueInput.value = customValue;
                 }
             } else {
-                expiryText.innerText = newValue;
+                expiryText.innerText = formatExpiry(newValue);
                 expiryValueInput.value = newValue;
             }
         });
@@ -443,7 +444,7 @@
             fetch('/getExpiryOptions').then(response => response.json()).then(options => {
                 if (options && options.length > 0) {
                     expiryOptions = options;
-                    expiryText.innerText = expiryOptions[0];
+                    expiryText.innerText = formatExpiry(expiryOptions[0]);
                     expiryValueInput.value = expiryOptions[0];
                 }
             }).catch(error => console.error('Error fetching expiry options:', error));
