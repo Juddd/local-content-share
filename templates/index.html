@@ -427,7 +427,7 @@
             }
         });
 
-        // Fetch expiry options and reverse link order on load
+        // Fetch expiry options and show the newest entries first in every section
         document.addEventListener('DOMContentLoaded', function() {
             fetch('/getExpiryOptions').then(response => response.json()).then(options => {
                 if (options && options.length > 0) {
@@ -436,13 +436,11 @@
                     expiryValueInput.value = expiryOptions[0];
                 }
             }).catch(error => console.error('Error fetching expiry options:', error));
-            // Reverse the order so newest are on top
-            const linksList = document.getElementById('links-list');
-            if (linksList) {
-                const links = Array.from(linksList.children);
-                links.reverse();
-                links.forEach(link => linksList.appendChild(link));
-            }
+            ['snippets-list', 'files-list', 'links-list'].forEach(listId => {
+                const list = document.getElementById(listId);
+                if (!list) return;
+                Array.from(list.children).reverse().forEach(item => list.appendChild(item));
+            });
         });
 
         // Rename Modal Logic

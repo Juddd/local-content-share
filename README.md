@@ -52,7 +52,7 @@ name: local-content-share
 
 services:
   local-content-share:
-    image: ghcr.io/juddd/local-content-share:v38-yode.1
+    image: ghcr.io/juddd/local-content-share:latest
     container_name: local-content-share
     restart: unless-stopped
     ports:
