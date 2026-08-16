@@ -42,6 +42,7 @@ Local Content Share 是一个简洁的自托管内容中转服务，可以在不
 - Links 支持独立标题、标题重命名以及在新标签页打开
 - 兼容旧版只保存 URL 的 Links 数据
 - 修复 HTTP 环境下复制操作导致页面跳到最底部的问题
+- Snippets 和 Files 按创建时间倒序排列，最新添加的内容显示在最前面
 
 ## Docker 部署
 

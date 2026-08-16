@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,10 +32,11 @@ var (
 )
 
 type Entry struct {
-	ID       string
-	Content  string
-	Type     string
-	Filename string
+	ID        string
+	Content   string
+	Type      string
+	Filename  string
+	CreatedAt time.Time
 }
 
 type ExpirationTracker struct {
@@ -324,11 +326,16 @@ func main() {
 			if err != nil {
 				continue
 			}
+			info, err := file.Info()
+			if err != nil {
+				continue
+			}
 			entries = append(entries, Entry{
-				ID:       filepath.Join("text", file.Name()),
-				Type:     "text",
-				Content:  string(data),
-				Filename: file.Name(),
+				ID:        filepath.Join("text", file.Name()),
+				Type:      "text",
+				Content:   string(data),
+				Filename:  file.Name(),
+				CreatedAt: info.ModTime(),
 			})
 		}
 		// Read files
@@ -337,10 +344,15 @@ func main() {
 			if file.IsDir() {
 				continue
 			}
+			info, err := file.Info()
+			if err != nil {
+				continue
+			}
 			entries = append(entries, Entry{
-				ID:       filepath.Join("files", file.Name()),
-				Type:     "file",
-				Filename: file.Name(),
+				ID:        filepath.Join("files", file.Name()),
+				Type:      "file",
+				Filename:  file.Name(),
+				CreatedAt: info.ModTime(),
 			})
 		}
 		// Read links
@@ -370,6 +382,9 @@ func main() {
 				})
 			}
 		}
+		sort.SliceStable(entries, func(i, j int) bool {
+			return entries[i].CreatedAt.After(entries[j].CreatedAt)
+		})
 		tmpl.ExecuteTemplate(w, "index.html", entries)
 	})
 
@@ -849,10 +864,17 @@ func main() {
 			http.Error(w, "Content cannot be empty", http.StatusBadRequest)
 			return
 		}
-		err := os.WriteFile(filepath.Join("data", id), []byte(content), 0644)
+		filePath := filepath.Join("data", id)
+		info, statErr := os.Stat(filePath)
+		err := os.WriteFile(filePath, []byte(content), 0644)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if statErr == nil {
+			if err := os.Chtimes(filePath, time.Now(), info.ModTime()); err != nil {
+				log.Printf("Failed to preserve creation order timestamp for %s: %v\n", id, err)
+			}
 		}
 		notifyContentChange()
 		http.Redirect(w, r, "/", http.StatusSeeOther)

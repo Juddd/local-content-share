@@ -436,11 +436,10 @@
                     expiryValueInput.value = expiryOptions[0];
                 }
             }).catch(error => console.error('Error fetching expiry options:', error));
-            ['snippets-list', 'files-list', 'links-list'].forEach(listId => {
-                const list = document.getElementById(listId);
-                if (!list) return;
-                Array.from(list.children).reverse().forEach(item => list.appendChild(item));
-            });
+            const linksList = document.getElementById('links-list');
+            if (linksList) {
+                Array.from(linksList.children).reverse().forEach(item => linksList.appendChild(item));
+            }
         });
 
         // Rename Modal Logic
