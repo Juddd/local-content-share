@@ -2,6 +2,8 @@
 
 本版本基于官方 `Tanq16/local-content-share` 制作，主要针对多设备文字、文件和链接中转场景进行界面与操作增强。
 
+对应个人增强版源码分支：`Juddd/local-content-share:main`。
+
 ## 新增与改进
 
 - Snippets 卡片直接显示标题与正文
