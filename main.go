@@ -435,7 +435,8 @@ func main() {
 		data, err := os.ReadFile(filepath.Join("data", "links.file"))
 		if err == nil {
 			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-			for _, line := range lines {
+			linksInfo, _ := os.Stat(filepath.Join("data", "links.file"))
+			for lineIndex, line := range lines {
 				line = strings.TrimSpace(line)
 				if line == "" {
 					continue
@@ -450,11 +451,18 @@ func main() {
 						linkTitle = linkURL
 					}
 				}
+				fallback := time.Now().Add(time.Duration(lineIndex-len(lines)) * time.Second)
+				if linksInfo != nil {
+					fallback = linksInfo.ModTime().Add(time.Duration(lineIndex-len(lines)) * time.Second)
+				}
+				itemTimes := itemTimeTracker.Get("link/"+storedLine, fallback)
 				entries = append(entries, Entry{
-					ID:       "link/" + url.PathEscape(storedLine),
-					Type:     "link",
-					Content:  linkURL,
-					Filename: linkTitle,
+					ID:         "link/" + url.PathEscape(storedLine),
+					Type:       "link",
+					Content:    linkURL,
+					Filename:   linkTitle,
+					CreatedAt:  itemTimes.CreatedAt,
+					ModifiedAt: itemTimes.ModifiedAt,
 				})
 			}
 		}
@@ -641,6 +649,7 @@ func main() {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			itemTimeTracker.Create("link/" + storedLink)
 			log.Printf("Saved link %s\n", content)
 		} else {
 			// Handle file and text submission
@@ -753,6 +762,7 @@ func main() {
 				http.Error(w, "Failed to save link title", http.StatusInternalServerError)
 				return
 			}
+			itemTimeTracker.Rename("link/"+storedLink, "link/"+newName+"\t"+linkURL)
 			notifyContentChange()
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			log.Printf("Renamed link title to %s\n", newName)
@@ -905,6 +915,7 @@ func main() {
 				http.Error(w, "Failed to write links file after deletion", http.StatusInternalServerError)
 				return
 			}
+			itemTimeTracker.Delete("link/" + linkToDelete)
 			notifyContentChange()
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)

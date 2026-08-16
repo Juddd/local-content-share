@@ -1,3 +1,13 @@
+{{define "section-sort"}}
+<div class="relative section-sort" data-list="{{.}}">
+    <button type="button" class="section-sort-button flex items-center gap-2 px-3 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors" title="排序"><i class="fas fa-arrow-down-wide-short text-subtext0"></i><span class="section-sort-text font-medium text-sm text-subtext0">创建时间 ↓</span></button>
+    <div class="section-sort-menu hidden absolute top-full mt-2 right-0 min-w-40 bg-base border border-surface0 rounded-xl p-1 z-40 shadow-lg">
+        <button type="button" data-sort="created" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">创建时间</button>
+        <button type="button" data-sort="modified" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">修改时间</button>
+        <button type="button" data-sort="title" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">标题字典序</button>
+    </div>
+</div>
+{{end}}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -124,14 +134,6 @@
                         <i class="fas fa-pen-nib text-subtext0"></i>
                         <span class="font-medium text-sm text-subtext0">New</span>
                     </button>
-                    <div class="relative">
-                        <button type="button" id="sort-button" class="flex items-center gap-2 px-4 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors"><i class="fas fa-arrow-down-wide-short text-subtext0"></i><span id="sort-button-text" class="font-medium text-sm text-subtext0">创建时间 ↓</span></button>
-                        <div id="sort-menu" class="hidden absolute top-full mt-2 right-0 min-w-40 bg-base border border-surface0 rounded-xl p-1 z-40 shadow-lg">
-                            <button type="button" data-sort="created" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">创建时间</button>
-                            <button type="button" data-sort="modified" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">修改时间</button>
-                            <button type="button" data-sort="title" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">标题字典序</button>
-                        </div>
-                    </div>
                     <a href="/md" class="flex items-center gap-2 px-4 py-2 bg-base hover:bg-surface0 rounded-xl transition-colors no-underline">
                         <i class="fas fa-note-sticky text-subtext0"></i>
                         <span class="font-medium text-sm text-subtext0">Notepad</span>
@@ -141,7 +143,7 @@
 
             <!-- Snippets Section -->
             <section class="content-section">
-                <h2 class="text-2xl font-semibold mb-4 text-center text-text">Snippets</h2>
+                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Snippets</h2>{{template "section-sort" "snippets-list"}}</div>
                 <div id="snippets-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "text"}}
                     <div data-snippet-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
@@ -163,7 +165,7 @@
 
             <!-- Files Section -->
             <section class="content-section">
-                <h2 class="text-2xl font-semibold mb-4 text-center text-text">Files</h2>
+                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Files</h2>{{template "section-sort" "files-list"}}</div>
                 <div id="files-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "file"}}
                     <div data-file-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
@@ -182,10 +184,10 @@
 
             <!-- Links Section -->
             <section class="content-section">
-                <h2 class="text-2xl font-semibold mb-4 text-center text-text">Links</h2>
+                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Links</h2>{{template "section-sort" "links-list"}}</div>
                 <div id="links-list" class="flex flex-col gap-2">
                     {{range .}}{{if eq .Type "link"}}
-                    <div data-link-row class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
+                    <div data-link-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
                         <div class="flex items-start justify-between gap-2">
                             <div class="min-w-0 flex-1">
                                 <div class="font-semibold text-text mb-1 break-all">{{.Filename}}</div>
@@ -444,49 +446,50 @@
                     expiryValueInput.value = expiryOptions[0];
                 }
             }).catch(error => console.error('Error fetching expiry options:', error));
-            const linksList = document.getElementById('links-list');
-            if (linksList) {
-                Array.from(linksList.children).reverse().forEach(item => linksList.appendChild(item));
-            }
-
-            const sortButton = document.getElementById('sort-button');
-            const sortMenu = document.getElementById('sort-menu');
-            const sortText = document.getElementById('sort-button-text');
             const labels = { created: '创建时间', modified: '修改时间', title: '标题字典序' };
-            let sortState;
-            try { sortState = JSON.parse(localStorage.getItem('contentSort')); } catch (_) {}
-            if (!sortState || !labels[sortState.key]) sortState = { key: 'created', direction: 'desc' };
+            document.querySelectorAll('.section-sort').forEach(sortControl => {
+                const listId = sortControl.dataset.list;
+                const list = document.getElementById(listId);
+                const button = sortControl.querySelector('.section-sort-button');
+                const menu = sortControl.querySelector('.section-sort-menu');
+                const text = sortControl.querySelector('.section-sort-text');
+                const storageKey = `contentSort:${listId}`;
+                let state;
+                try { state = JSON.parse(localStorage.getItem(storageKey)); } catch (_) {}
+                if (!state || !labels[state.key]) state = { key: 'created', direction: 'desc' };
 
-            function applyContentSort() {
-                ['snippets-list', 'files-list'].forEach(id => {
-                    const list = document.getElementById(id);
-                    if (!list) return;
+                function applySort() {
                     const items = Array.from(list.children);
                     items.sort((a, b) => {
                         let result;
-                        if (sortState.key === 'title') {
+                        if (state.key === 'title') {
                             result = a.dataset.title.localeCompare(b.dataset.title, 'zh-CN', { numeric: true, sensitivity: 'base' });
                         } else {
-                            result = Number(a.dataset[sortState.key]) - Number(b.dataset[sortState.key]);
+                            result = Number(a.dataset[state.key]) - Number(b.dataset[state.key]);
                         }
-                        return sortState.direction === 'asc' ? result : -result;
+                        return state.direction === 'asc' ? result : -result;
                     });
                     items.forEach(item => list.appendChild(item));
-                });
-                sortText.textContent = `${labels[sortState.key]} ${sortState.direction === 'asc' ? '↑' : '↓'}`;
-                localStorage.setItem('contentSort', JSON.stringify(sortState));
-            }
+                    text.textContent = `${labels[state.key]} ${state.direction === 'asc' ? '↑' : '↓'}`;
+                    localStorage.setItem(storageKey, JSON.stringify(state));
+                }
 
-            sortButton.addEventListener('click', event => { event.stopPropagation(); sortMenu.classList.toggle('hidden'); });
-            document.querySelectorAll('.sort-option').forEach(option => option.addEventListener('click', () => {
-                const key = option.dataset.sort;
-                if (sortState.key === key) sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
-                else sortState = { key, direction: key === 'title' ? 'asc' : 'desc' };
-                sortMenu.classList.add('hidden');
-                applyContentSort();
-            }));
-            document.addEventListener('click', () => sortMenu.classList.add('hidden'));
-            applyContentSort();
+                button.addEventListener('click', event => {
+                    event.stopPropagation();
+                    document.querySelectorAll('.section-sort-menu').forEach(other => { if (other !== menu) other.classList.add('hidden'); });
+                    menu.classList.toggle('hidden');
+                });
+                menu.querySelectorAll('.sort-option').forEach(option => option.addEventListener('click', event => {
+                    event.stopPropagation();
+                    const key = option.dataset.sort;
+                    if (state.key === key) state.direction = state.direction === 'asc' ? 'desc' : 'asc';
+                    else state = { key, direction: key === 'title' ? 'asc' : 'desc' };
+                    menu.classList.add('hidden');
+                    applySort();
+                }));
+                applySort();
+            });
+            document.addEventListener('click', () => document.querySelectorAll('.section-sort-menu').forEach(menu => menu.classList.add('hidden')));
         });
 
         // Rename Modal Logic
