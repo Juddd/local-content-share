@@ -5,6 +5,7 @@
         <button type="button" data-sort="created" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">创建时间</button>
         <button type="button" data-sort="modified" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">修改时间</button>
         <button type="button" data-sort="title" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">标题字典序</button>
+        {{if eq . "files-list"}}<button type="button" data-sort="size" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">文件大小</button>{{end}}
     </div>
 </div>
 {{end}}
@@ -168,7 +169,7 @@
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Files</h2>{{template "section-sort" "files-list"}}</div>
                 <div id="files-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "file"}}
-                    <div data-file-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
+                    <div data-file-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
                         <div class="font-medium truncate text-text mr-2">{{.Filename}}</div>
                         <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
                             <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Rename"><i class="fas fa-i-cursor"></i></button>
@@ -446,7 +447,7 @@
                     expiryValueInput.value = expiryOptions[0];
                 }
             }).catch(error => console.error('Error fetching expiry options:', error));
-            const labels = { created: '创建时间', modified: '修改时间', title: '标题字典序' };
+            const labels = { created: '创建时间', modified: '修改时间', title: '标题字典序', size: '文件大小' };
             document.querySelectorAll('.section-sort').forEach(sortControl => {
                 const listId = sortControl.dataset.list;
                 const list = document.getElementById(listId);

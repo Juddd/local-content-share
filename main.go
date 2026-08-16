@@ -38,6 +38,7 @@ type Entry struct {
 	Filename   string
 	CreatedAt  time.Time
 	ModifiedAt time.Time
+	Size       int64
 }
 
 type ItemTimes struct{ CreatedAt, ModifiedAt time.Time }
@@ -429,6 +430,7 @@ func main() {
 				Filename:   file.Name(),
 				CreatedAt:  itemTimes.CreatedAt,
 				ModifiedAt: itemTimes.ModifiedAt,
+				Size:       info.Size(),
 			})
 		}
 		// Read links
