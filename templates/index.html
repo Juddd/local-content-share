@@ -124,6 +124,14 @@
                         <i class="fas fa-pen-nib text-subtext0"></i>
                         <span class="font-medium text-sm text-subtext0">New</span>
                     </button>
+                    <div class="relative">
+                        <button type="button" id="sort-button" class="flex items-center gap-2 px-4 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors"><i class="fas fa-arrow-down-wide-short text-subtext0"></i><span id="sort-button-text" class="font-medium text-sm text-subtext0">创建时间 ↓</span></button>
+                        <div id="sort-menu" class="hidden absolute top-full mt-2 right-0 min-w-40 bg-base border border-surface0 rounded-xl p-1 z-40 shadow-lg">
+                            <button type="button" data-sort="created" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">创建时间</button>
+                            <button type="button" data-sort="modified" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">修改时间</button>
+                            <button type="button" data-sort="title" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">标题字典序</button>
+                        </div>
+                    </div>
                     <a href="/md" class="flex items-center gap-2 px-4 py-2 bg-base hover:bg-surface0 rounded-xl transition-colors no-underline">
                         <i class="fas fa-note-sticky text-subtext0"></i>
                         <span class="font-medium text-sm text-subtext0">Notepad</span>
@@ -136,7 +144,7 @@
                 <h2 class="text-2xl font-semibold mb-4 text-center text-text">Snippets</h2>
                 <div id="snippets-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "text"}}
-                    <div data-snippet-row class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
+                    <div data-snippet-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
                         <div class="flex items-start justify-between gap-2 mb-2">
                             <div class="font-semibold text-text break-all min-w-0">{{.Filename}}</div>
                             <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
@@ -158,14 +166,15 @@
                 <h2 class="text-2xl font-semibold mb-4 text-center text-text">Files</h2>
                 <div id="files-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "file"}}
-                    <div data-file-row class="flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
+                    <div data-file-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
                         <div class="font-medium truncate text-text mr-2">{{.Filename}}</div>
                         <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
                             <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Rename"><i class="fas fa-i-cursor"></i></button>
                             <a href="/download/{{.ID}}" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="Download"><i class="fas fa-download"></i></a>
                             <a data-file-view href="/view/{{.ID}}" target="_blank" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="View"><i class="fas fa-eye"></i></a>
                             <button onclick="event.stopPropagation(); copyFileUrl(this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy file URL"><i class="fas fa-link"></i></button>
-                            <button onclick="event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
+                            <button onclick="event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></
+i></button>
                         </div>
                     </div>
                     {{end}}{{end}}
@@ -440,6 +449,45 @@
             if (linksList) {
                 Array.from(linksList.children).reverse().forEach(item => linksList.appendChild(item));
             }
+
+            const sortButton = document.getElementById('sort-button');
+            const sortMenu = document.getElementById('sort-menu');
+            const sortText = document.getElementById('sort-button-text');
+            const labels = { created: '创建时间', modified: '修改时间', title: '标题字典序' };
+            let sortState;
+            try { sortState = JSON.parse(localStorage.getItem('contentSort')); } catch (_) {}
+            if (!sortState || !labels[sortState.key]) sortState = { key: 'created', direction: 'desc' };
+
+            function applyContentSort() {
+                ['snippets-list', 'files-list'].forEach(id => {
+                    const list = document.getElementById(id);
+                    if (!list) return;
+                    const items = Array.from(list.children);
+                    items.sort((a, b) => {
+                        let result;
+                        if (sortState.key === 'title') {
+                            result = a.dataset.title.localeCompare(b.dataset.title, 'zh-CN', { numeric: true, sensitivity: 'base' });
+                        } else {
+                            result = Number(a.dataset[sortState.key]) - Number(b.dataset[sortState.key]);
+                        }
+                        return sortState.direction === 'asc' ? result : -result;
+                    });
+                    items.forEach(item => list.appendChild(item));
+                });
+                sortText.textContent = `${labels[sortState.key]} ${sortState.direction === 'asc' ? '↑' : '↓'}`;
+                localStorage.setItem('contentSort', JSON.stringify(sortState));
+            }
+
+            sortButton.addEventListener('click', event => { event.stopPropagation(); sortMenu.classList.toggle('hidden'); });
+            document.querySelectorAll('.sort-option').forEach(option => option.addEventListener('click', () => {
+                const key = option.dataset.sort;
+                if (sortState.key === key) sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+                else sortState = { key, direction: key === 'title' ? 'asc' : 'desc' };
+                sortMenu.classList.add('hidden');
+                applyContentSort();
+            }));
+            document.addEventListener('click', () => sortMenu.classList.add('hidden'));
+            applyContentSort();
         });
 
         // Rename Modal Logic

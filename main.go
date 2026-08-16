@@ -32,11 +32,80 @@ var (
 )
 
 type Entry struct {
-	ID        string
-	Content   string
-	Type      string
-	Filename  string
-	CreatedAt time.Time
+	ID         string
+	Content    string
+	Type       string
+	Filename   string
+	CreatedAt  time.Time
+	ModifiedAt time.Time
+}
+
+type ItemTimes struct{ CreatedAt, ModifiedAt time.Time }
+type ItemTimeTracker struct {
+	Items map[string]ItemTimes `json:"items"`
+	mu    sync.Mutex
+}
+
+var itemTimeTracker *ItemTimeTracker
+
+func initItemTimeTracker() *ItemTimeTracker {
+	t := &ItemTimeTracker{Items: map[string]ItemTimes{}}
+	if data, err := os.ReadFile(filepath.Join("data", "item-times.json")); err == nil {
+		_ = json.Unmarshal(data, t)
+	}
+	if t.Items == nil {
+		t.Items = map[string]ItemTimes{}
+	}
+	return t
+}
+func (t *ItemTimeTracker) save() {
+	data, _ := json.MarshalIndent(t, "", "  ")
+	_ = os.WriteFile(filepath.Join("data", "item-times.json"), data, 0644)
+}
+func (t *ItemTimeTracker) Get(id string, fallback time.Time) ItemTimes {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	v, ok := t.Items[id]
+	if !ok {
+		v = ItemTimes{fallback, fallback}
+		t.Items[id] = v
+		t.save()
+	}
+	return v
+}
+func (t *ItemTimeTracker) Create(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := time.Now()
+	t.Items[id] = ItemTimes{now, now}
+	t.save()
+}
+func (t *ItemTimeTracker) Touch(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	v, ok := t.Items[id]
+	if !ok {
+		v.CreatedAt = time.Now()
+	}
+	v.ModifiedAt = time.Now()
+	t.Items[id] = v
+	t.save()
+}
+func (t *ItemTimeTracker) Rename(oldID, newID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if v, ok := t.Items[oldID]; ok {
+		delete(t.Items, oldID)
+		v.ModifiedAt = time.Now()
+		t.Items[newID] = v
+		t.save()
+	}
+}
+func (t *ItemTimeTracker) Delete(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.Items, id)
+	t.save()
 }
 
 type ExpirationTracker struct {
@@ -275,6 +344,7 @@ func main() {
 
 	// Initialize the expiration tracker
 	expirationTracker = initExpirationTracker()
+	itemTimeTracker = initItemTimeTracker()
 	customExpiry := os.Getenv("DEFAULT_EXPIRY")
 	if customExpiry != "" {
 		switch customExpiry {
@@ -330,12 +400,15 @@ func main() {
 			if err != nil {
 				continue
 			}
+			id := filepath.Join("text", file.Name())
+			itemTimes := itemTimeTracker.Get(id, info.ModTime())
 			entries = append(entries, Entry{
-				ID:        filepath.Join("text", file.Name()),
-				Type:      "text",
-				Content:   string(data),
-				Filename:  file.Name(),
-				CreatedAt: info.ModTime(),
+				ID:         id,
+				Type:       "text",
+				Content:    string(data),
+				Filename:   file.Name(),
+				CreatedAt:  itemTimes.CreatedAt,
+				ModifiedAt: itemTimes.ModifiedAt,
 			})
 		}
 		// Read files
@@ -348,11 +421,14 @@ func main() {
 			if err != nil {
 				continue
 			}
+			id := filepath.Join("files", file.Name())
+			itemTimes := itemTimeTracker.Get(id, info.ModTime())
 			entries = append(entries, Entry{
-				ID:        filepath.Join("files", file.Name()),
-				Type:      "file",
-				Filename:  file.Name(),
-				CreatedAt: info.ModTime(),
+				ID:         id,
+				Type:       "file",
+				Filename:   file.Name(),
+				CreatedAt:  itemTimes.CreatedAt,
+				ModifiedAt: itemTimes.ModifiedAt,
 			})
 		}
 		// Read links
@@ -401,7 +477,8 @@ func main() {
 	// Serve static files from embedded filesystem
 	staticFS, err := fs.Sub(content, "static")
 	if err != nil {
-		log.Fatalf("Failed to create static sub-filesystem: %v", err)
+		log.Fatalf("
+Failed to create static sub-filesystem: %v", err)
 	}
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 
@@ -591,6 +668,7 @@ func main() {
 						if _, err := io.Copy(f, file); err != nil {
 							return err
 						}
+						itemTimeTracker.Create(filepath.Join("files", uniqueFileName))
 						if expiryOption != "Never" {
 							fileID := filepath.Join("files", uniqueFileName)
 							expirationTracker.SetExpiration(fileID, expiryOption)
@@ -615,6 +693,7 @@ func main() {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
+				itemTimeTracker.Create(filepath.Join("text", uniqueFileName))
 				if expiryOption != "Never" {
 					fileID := filepath.Join("text", uniqueFileName)
 					expirationTracker.SetExpiration(fileID, expiryOption)
@@ -704,6 +783,9 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		newID := strings.TrimPrefix(newPath, "data/")
+		newID = strings.ReplaceAll(newID, "\\", "/")
+		itemTimeTracker.Rename(oldPath, newID)
 		notifyContentChange()
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		log.Printf("Renamed %s to %s\n", oldPath, newName)
@@ -838,6 +920,7 @@ func main() {
 			http.Error(w, "Failed to delete file", http.StatusInternalServerError)
 			return
 		}
+		itemTimeTracker.Delete(id)
 		expirationTracker.mu.Lock()
 		delete(expirationTracker.Expirations, id)
 		expirationTracker.saveToFile()
@@ -872,10 +955,9 @@ func main() {
 			return
 		}
 		if statErr == nil {
-			if err := os.Chtimes(filePath, time.Now(), info.ModTime()); err != nil {
-				log.Printf("Failed to preserve creation order timestamp for %s: %v\n", id, err)
-			}
+			itemTimeTracker.Get(id, info.ModTime())
 		}
+		itemTimeTracker.Touch(id)
 		notifyContentChange()
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		log.Printf("Edited %s\n", id)
