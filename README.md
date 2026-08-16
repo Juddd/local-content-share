@@ -1,144 +1,136 @@
 <div align="center">
-  <img src="assets/logo.svg" alt="Local Content Share Logo" width="200">
-  <h1>Local Content Share</h1>
+  <img src="assets/logo.svg" alt="Local Content Share 标志" width="200">
+  <h1>Local Content Share（个人增强版）</h1>
 
-  <a href="https://github.com/tanq16/local-content-share/actions/workflows/binary-build.yml"><img alt="Build Workflow" src="https://github.com/tanq16/local-content-share/actions/workflows/binary-build.yml/badge.svg"></a>&nbsp;<a href="https://github.com/tanq16/local-content-share/actions/workflows/docker-publish.yml"><img alt="Container Workflow" src="https://github.com/tanq16/local-content-share/actions/workflows/docker-publish.yml/badge.svg"></a><br>
-  <a href="https://github.com/Tanq16/local-content-share/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/tanq16/local-content-share"></a>&nbsp;<a href="https://hub.docker.com/r/tanq16/local-content-share"><img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/tanq16/local-content-share"></a><br><br>
-  <a href="#screenshots">Screenshots</a> &bull; <a href="#installation-and-usage">Install & Use</a> &bull; <a href="#tips-and-notes">Tips & Notes</a>
+  <a href="https://github.com/Juddd/local-content-share/actions/workflows/docker-publish.yml"><img alt="容器构建状态" src="https://github.com/Juddd/local-content-share/actions/workflows/docker-publish.yml/badge.svg"></a>
+  <a href="https://github.com/Juddd/local-content-share/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/Juddd/local-content-share"></a>
+  <br><br>
+  <a href="#功能">功能</a> &bull; <a href="#本增强版新增内容">增强内容</a> &bull; <a href="#docker-部署">Docker 部署</a> &bull; <a href="#使用说明">使用说明</a>
 </div>
 
 ---
 
-A simple & elegant self-hosted app for **storing/sharing text snippets, files, and links** in your **local network** with **no setup on client devices**. Think of this as an *all-in-one alternative* to **airdrop**, **local-pastebin**, and a **scratchpad**. The primary features are:
+Local Content Share 是一个简洁的自托管内容中转服务，可以在不同设备之间共享文字片段、文件和链接。客户端无需安装应用，只要使用浏览器打开服务页面即可。
 
-- Make plain text **snippets** available to **view/share** on any device in the local network
-- **Upload files** and make them available to **view/download** on any device in the local network
-- **Store links** to **share** in last in, first show order in its own section
-- Built-in **Notepad** with **Markdown** editing and preview capabilities
-- **Rename** text snippets and files uploaded to easily find them in the UI
-- **Edit** text snippets to modify their content as needed
-- **Multi-file** **drag-n-drop** support for uploading files
-- Configurable **expiration (or TTL, i.e., time to live)** per file/snippet for Never, 1 hour, 4 hours, 1 day, or Custom
-- Use of **SSE** to automatically inform all clients of new/deleted/edited files
-- Completely **local assets**, so the app works in your network even without internet
-- **Multi-arch** (x86-64 and ARM64) **Docker image** for **homelab** deployments
-- Frontend accessible via **browsers** and as a **PWA** (progressive web apps)
-- Clean, modern interface with **automatic light/dark** Catppuccin themed UI that looks good on mobile too
+本仓库 Fork 自 [Tanq16/local-content-share](https://github.com/Tanq16/local-content-share)，在保留官方功能和数据格式的基础上，针对桌面端横向空间、文字直接预览、文件地址分享及链接管理进行了增强。
 
-Make sure to look into [Tips & Notes](#tips-and-notes) if you have questions about individual functionalities.
+> [!WARNING]
+> 本项目没有用户认证和权限系统。若直接暴露到公网，任何能够访问地址的人都可能查看、上传或删除内容。请根据实际需要在反向代理层增加认证与访问限制。
 
-> [!NOTE]
-> This application is meant to be deployed within your homelab only. There is no authentication mechanism implemented. If you are exposing to the public, ensure there is authentication fronting it and non-destructive users using it.
+## 功能
 
-## Screenshots
+- 在浏览器中创建、查看、编辑、重命名、复制和删除文字片段
+- 上传、预览、下载、重命名和删除文件
+- 保存、复制、重命名及打开常用链接
+- 内置支持 Markdown 编辑和预览的 Notepad
+- 支持拖放、选择和粘贴上传文件或截图
+- 支持永不过期、1 小时、4 小时、1 天及自定义有效期
+- 使用 SSE 在多个浏览器之间同步内容变化
+- 静态资源完全本地化，局域网断网时仍可使用
+- 自动跟随系统浅色/深色主题
+- 支持浏览器访问和 PWA 安装
+- 提供 AMD64 与 ARM64 容器镜像
 
-| | Desktop View | Mobile View |
-| --- | --- | --- |
-| Light | <img src="assets/dlight.png" alt="Light"> | <img src="assets/mlight.png" alt="Light"> |
-| Dark | <img src="assets/ddark.png" alt="Dark"> | <img src="assets/mdark.png" alt="Dark"> |
+## 本增强版新增内容
 
-## Installation and Usage
+- Snippets 卡片同时显示标题和正文，不再只能点击后查看内容
+- 正文最多直接预览前 600 个 Unicode 字符，超长内容点击正文查看全文
+- 复制按钮始终复制完整正文，不受预览截断影响
+- 桌面端取消固定内容宽度，卡片按屏幕宽度自动增加列数；手机端保持单列
+- 调整 Snippets 卡片结构，正文可以使用按钮下方的完整宽度
+- Files 增加“复制文件直达地址”按钮，地址会自动使用当前访问域名
+- Links 支持独立标题、标题重命名以及在新标签页打开
+- 兼容旧版只保存 URL 的 Links 数据
+- 修复 HTTP 环境下复制操作导致页面跳到最底部的问题
 
-### Using Docker (Recommended for Self-Hosting)
+## Docker 部署
 
-Use `docker` CLI one liner and setup a persistence directory (so a container failure does not delete your data):
-
-```bash
-mkdir $HOME/.localcontentshare
-```
-```bash
-docker run --name local-content-share \
-  -p 8080:8080 \
-  -v $HOME/.localcontentshare:/app/data \
-  tanq16/local-content-share:main
-```
-
-The application will be available at `http://localhost:8080` (or your server IP).
-
-You can also use the following compose file with container managers like Portainer and Dockge (remember to change the mounted volume):
+推荐使用本仓库发布到 GitHub Container Registry 的镜像：
 
 ```yaml
+name: local-content-share
+
 services:
-  contentshare:
-    image: tanq16/local-content-share:main
+  local-content-share:
+    image: ghcr.io/juddd/local-content-share:v38-yode.1
     container_name: local-content-share
-    volumes:
-      - /home/tanq/lcshare:/app/data # Change as needed
+    restart: unless-stopped
     ports:
-      - 8080:8080
+      - "8084:8080"
+    volumes:
+      - /volume1/docker/local-content-share/data:/app/data
+    environment:
+      TZ: Asia/Shanghai
 ```
 
-### Using Binary
-
-Download the appropriate binary for your system from the [latest release](https://github.com/tanq16/local-content-share/releases/latest).
-
-Make the binary executable (for Linux/macOS) with `chmod +x local-content-share-*` and then run the binary with `./local-content-share-*`. The application will be available at `http://localhost:8080`.
-
-### Local development
-
-With `Go 1.23+` installed, run the following to download the binary to your GOBIN:
+启动项目：
 
 ```bash
-go install github.com/tanq16/local-content-share@latest
+docker compose up -d
 ```
 
-Or, you can build from source like so:
+服务默认监听容器内的 `8080` 端口。上面的示例会通过宿主机 `8084` 端口访问。
+
+数据全部保存在挂载到 `/app/data` 的目录中。更新或重建容器不会删除这些数据。
+
+### 从源码构建
 
 ```bash
-git clone https://github.com/tanq16/local-content-share.git && \
-cd local-content-share && \
-go build .
+git clone https://github.com/Juddd/local-content-share.git
+cd local-content-share
+docker build -t local-content-share .
 ```
 
-## Tips and Notes
+## 使用说明
 
-- To share text content:
-   - Type or paste your text in the text area (the upload button will change to a submit button)
-   - (OPTIONAL) type the name of the snippet (otherwise it will name it as a time string)
-   - Click the submit button (looks like the telegram arrow) to upload the snippet
-- To rename files or text snippets:
-   - Click the cursor (i-beam) icon and provide the new name
-   - It will automatically prepend 4 random digits if the name isn't unique
-- To edit existing snippets:
-   - Click the pen icon and it will populate the expandable text area with the content
-   - Write the new content and click accept or deny (check or cross) in the same text area
-   - On accepting, it will edit the content; on denying, it will refresh the page
-- To share files:
-   - Click the upload button and select your file
-   - OR drag and drop your file (even multiple files) to the text area
-   - OR click into the text area and paste a file or screenshot from clipboard
-   - It will automatically append 4 random digits if filename isn't unique
-- To view content, click the eye icon:
-   - For text content, it shows the raw text, which can be copied with a button on top
-   - For files, it shows raw text, images, PDFs, etc. (basically whatever the browser will do)
-- To download files, click the download icon
-- To delete content, click the trash icon
-- To set expiration for a file or snippet
-   - Click the clock icon with the "Never" text (signifying no expiry) to cycle between times
-   - For a non-"Never" expiration, the file will automatically be removed after the specified period
-   - Set the cycling button to 1 hour, 4 hours, 1 day, or Custom before adding a snippet or file
-      - The Custom option will prompt to ask for the expiry after you click submit/upload
-      - The value for custom expiration can be of the format `NT` (eg. `34m`, `3w`, `2M`, `11d`)
-      - N is the number and T is the time denomination (m=minute, h=hour, d=day, w=week, M=month, y=year)
-   - Use the `DEFAULT_EXPIRY` environment variable to set a default expiration (follows format of Custom specified above)
-      - This value will be set as default on the home page instead of `Never`
-      - The other options will still be available by cycling if needed
-- The Notepad is for writing something quickly and getting back to it from any device
-   - It supports both markdown edit and preview modes
-   - Content is automatically saved upon inactivity in the backend and will load as is on any device
+### 文字片段
 
-### A Note on Reverse Proxies
+点击页面顶部的 `New`，可填写可选标题和正文。未填写标题时会自动使用时间作为名称。
 
-Reverse proxies are fairly common in homelab settings to assign SSL certificates and use domains. The reason for this note is that some reverse proxy settings may interfere with the functioning of this app. Primarily, there are 2 features that could be affected:
+- 点击铅笔按钮编辑正文
+- 点击光标按钮修改标题
+- 点击复制按钮复制完整正文
+- 超过 600 个字符时，点击正文打开全文窗口
+- 点击垃圾桶按钮删除内容
 
-- File Size: reverse proxy software may impose a limit on file sizes, but Local Content Share does not
-- Upload Progress: file upload progress for large files may not be visible until the file has been uploaded because of buffering setups on rever proxy software
+### 文件
 
-Following is a sample fix for Nginx Proxy Manager, please look into equivalent settings for other reverse proxy setups like Caddy.
+点击 `New` 后选择文件，也可以把一个或多个文件拖入上传区，或者直接粘贴剪贴板中的文件和截图。
 
-For the associated proxy host in NPM, click Edit and visit the Advanced tab. There, paste the following custom configuration:
+- 下载按钮保存文件
+- 眼睛按钮由浏览器直接预览文件
+- 链条按钮复制当前访问环境下的文件直达地址
+- 光标按钮重命名文件
 
-```
+如果局域网和公网对同一域名使用不同 DNS 解析，复制出来的地址会自动匹配当前访问环境。
+
+### 链接
+
+点击顶部的 `Link`，填写标题和以 `http://` 或 `https://` 开头的 URL。
+
+- 光标按钮修改标题，不改变 URL
+- 跳转按钮在新标签页打开链接
+- 复制按钮复制 URL
+- 旧版链接会继续兼容，并可通过重命名补充标题
+
+### 有效期
+
+创建文字或上传文件时，可以循环选择 `Never`、`1 hour`、`4 hours`、`1 day` 或 `Custom`。自定义值格式为“数字 + 单位”，例如：
+
+- `30m`：30 分钟
+- `6h`：6 小时
+- `3d`：3 天
+- `2w`：2 周
+- `1M`：1 个月
+- `1y`：1 年
+
+也可以通过 `DEFAULT_EXPIRY` 环境变量设置默认有效期。
+
+## 反向代理说明
+
+反向代理可能限制上传大小或缓存上传请求。以 Nginx Proxy Manager 为例，可以使用：
+
+```nginx
 client_max_body_size 5G;
 proxy_request_buffering off;
 proxy_buffering off;
@@ -147,8 +139,22 @@ proxy_send_timeout 3600s;
 proxy_connect_timeout 3600s;
 ```
 
-This configuration will set the maximum accept size for file transfer through NPM as 5 GB and will also disable buffering so interaction will take place directly with Local Content Share.
+## 数据目录
 
-### Backend Data Structure
+应用会在 `/app/data` 下保存：
 
-The application creates a `data` directory to store all uploaded files, text snippets, notepad notes, and links (in `files/`, `text/`, `md.file`, and `links.file` respectively). File expirations are saved in an `expiration.json` file in the data directory. Make sure the application has write permissions for the directory where it runs.
+- `text/`：文字片段
+- `files/`：上传文件
+- `notepad/`：Markdown 记事本
+- `links.file`：链接
+- `expirations.json`：过期时间
+
+请确保容器对挂载的数据目录具有读写权限，并在升级前做好备份。
+
+## 上游与许可证
+
+- 个人增强版仓库：[Juddd/local-content-share](https://github.com/Juddd/local-content-share)
+- 官方上游仓库：[Tanq16/local-content-share](https://github.com/Tanq16/local-content-share)
+
+本项目继续遵循上游仓库所采用的许可证。
+warning: /bin/bash: setlocale: LC_ALL: cannot change locale (C.UTF-8)
