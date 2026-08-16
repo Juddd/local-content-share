@@ -477,8 +477,7 @@ func main() {
 	// Serve static files from embedded filesystem
 	staticFS, err := fs.Sub(content, "static")
 	if err != nil {
-		log.Fatalf("
-Failed to create static sub-filesystem: %v", err)
+		log.Fatalf("Failed to create static sub-filesystem: %v", err)
 	}
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 
