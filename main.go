@@ -296,7 +296,19 @@ func main() {
 		}
 	}()
 
-	tmpl := template.Must(template.ParseFS(content, "templates/*.html"))
+	funcMap := template.FuncMap{
+		"previewText": func(s string, max int) string {
+			runes := []rune(s)
+			if len(runes) <= max {
+				return s
+			}
+			return string(runes[:max])
+		},
+		"isTruncated": func(s string, max int) bool {
+			return len([]rune(s)) > max
+		},
+	}
+	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(content, "templates/*.html"))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Clean up expired files on page load
@@ -340,11 +352,21 @@ func main() {
 				if line == "" {
 					continue
 				}
+				storedLine := line
+				linkTitle := line
+				linkURL := line
+				if parts := strings.SplitN(line, "\t", 2); len(parts) == 2 {
+					linkTitle = strings.TrimSpace(parts[0])
+					linkURL = strings.TrimSpace(parts[1])
+					if linkTitle == "" {
+						linkTitle = linkURL
+					}
+				}
 				entries = append(entries, Entry{
-					ID:       "link/" + url.PathEscape(line),
+					ID:       "link/" + url.PathEscape(storedLine),
 					Type:     "link",
-					Content:  line,
-					Filename: line,
+					Content:  linkURL,
+					Filename: linkTitle,
 				})
 			}
 		}
@@ -519,7 +541,12 @@ func main() {
 				return
 			}
 			defer f.Close()
-			if _, err := f.WriteString(content + "\n"); err != nil {
+			name = strings.TrimSpace(strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(name))
+			storedLink := content
+			if name != "" {
+				storedLink = name + "\t" + content
+			}
+			if _, err := f.WriteString(storedLink + "\n"); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -599,6 +626,43 @@ func main() {
 		newName := r.FormValue("newname")
 		if newName == "" {
 			http.Error(w, "New name cannot be empty", http.StatusBadRequest)
+			return
+		}
+		if storedLink, ok := strings.CutPrefix(oldPath, "link/"); ok {
+			newName = strings.TrimSpace(strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(newName))
+			if newName == "" {
+				http.Error(w, "New name cannot be empty", http.StatusBadRequest)
+				return
+			}
+			linkURL := storedLink
+			if parts := strings.SplitN(storedLink, "\t", 2); len(parts) == 2 {
+				linkURL = strings.TrimSpace(parts[1])
+			}
+			linksFilePath := filepath.Join("data", "links.file")
+			data, err := os.ReadFile(linksFilePath)
+			if err != nil {
+				http.Error(w, "Failed to read links file", http.StatusInternalServerError)
+				return
+			}
+			lines := strings.Split(string(data), "\n")
+			found := false
+			for i, line := range lines {
+				if !found && strings.TrimSpace(line) == strings.TrimSpace(storedLink) {
+					lines[i] = newName + "\t" + linkURL
+					found = true
+				}
+			}
+			if !found {
+				http.Error(w, "Link not found", http.StatusNotFound)
+				return
+			}
+			if err := os.WriteFile(linksFilePath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+				http.Error(w, "Failed to save link title", http.StatusInternalServerError)
+				return
+			}
+			notifyContentChange()
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			log.Printf("Renamed link title to %s\n", newName)
 			return
 		}
 		baseDir := filepath.Dir(filepath.Join("data", oldPath))

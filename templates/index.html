@@ -91,11 +91,23 @@
         body {
             font-family: 'Inter', sans-serif;
         }
+
+        .responsive-card-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1rem;
+        }
+
+        @media (min-width: 768px) {
+            .responsive-card-grid {
+                grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+            }
+        }
     </style>
 </head>
 <body class="bg-crust text-text antialiased transition-colors duration-300">
 
-    <div class="container mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
+    <div class="w-full max-w-none p-4 sm:p-6 lg:p-8">
 
         <header class="text-center mb-8">
             <h1 class="text-3xl sm:text-4xl font-bold text-mauve">Local-Content-Share</h1>
@@ -122,16 +134,20 @@
             <!-- Snippets Section -->
             <section class="content-section">
                 <h2 class="text-2xl font-semibold mb-4 text-center text-text">Snippets</h2>
-                <div id="snippets-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div id="snippets-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "text"}}
-                    <div class="flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300 relative cursor-pointer" onclick="showViewModal('{{.ID}}', '{{.Filename}}')">
-                        <div class="font-medium truncate text-text mr-2">{{.Filename}}</div>
-                        <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
+                    <div data-snippet-row class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
+                        <div class="flex items-start justify-between gap-2 mb-2">
+                            <div class="font-semibold text-text break-all min-w-0">{{.Filename}}</div>
+                            <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
                             <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Rename"><i class="fas fa-i-cursor"></i></button>
                             <button onclick="event.stopPropagation(); showEditForm('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Edit"><i class="fas fa-pen"></i></button>
-                            <button onclick="event.stopPropagation(); copyToClipboard('{{.Content}}', this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy"><i class="fas fa-copy"></i></button>
+                            <button onclick="event.stopPropagation(); copyToClipboard(this.closest('[data-snippet-row]').querySelector('[data-snippet-full]').textContent, this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy"><i class="fas fa-copy"></i></button>
                             <button onclick="event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
+                            </div>
                         </div>
+                        <div data-snippet-content class="w-full whitespace-pre-wrap break-all text-subtext0{{if isTruncated .Content 600}} cursor-pointer{{end}}"{{if isTruncated .Content 600}} onclick="showViewModal('{{.ID}}', '{{.Filename}}')" title="点击查看全文"{{end}}>{{previewText .Content 600}}{{if isTruncated .Content 600}}… <span class="text-blue text-sm whitespace-nowrap">点击查看全文</span>{{end}}</div>
+                        <div data-snippet-full class="hidden">{{.Content}}</div>
                     </div>
                     {{end}}{{end}}
                 </div>
@@ -140,14 +156,15 @@
             <!-- Files Section -->
             <section class="content-section">
                 <h2 class="text-2xl font-semibold mb-4 text-center text-text">Files</h2>
-                <div id="files-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div id="files-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "file"}}
-                    <div class="flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
+                    <div data-file-row class="flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
                         <div class="font-medium truncate text-text mr-2">{{.Filename}}</div>
                         <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
                             <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Rename"><i class="fas fa-i-cursor"></i></button>
                             <a href="/download/{{.ID}}" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="Download"><i class="fas fa-download"></i></a>
-                            <a href="/view/{{.ID}}" target="_blank" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="View"><i class="fas fa-eye"></i></a>
+                            <a data-file-view href="/view/{{.ID}}" target="_blank" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="View"><i class="fas fa-eye"></i></a>
+                            <button onclick="event.stopPropagation(); copyFileUrl(this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy file URL"><i class="fas fa-link"></i></button>
                             <button onclick="event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
                         </div>
                     </div>
@@ -160,15 +177,20 @@
                 <h2 class="text-2xl font-semibold mb-4 text-center text-text">Links</h2>
                 <div id="links-list" class="flex flex-col gap-2">
                     {{range .}}{{if eq .Type "link"}}
-                    <a href="{{.Content}}" target="_blank" rel="noopener noreferrer" class="block bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300 no-underline group">
-                        <div class="flex items-center justify-between">
-                            <div class="font-medium truncate text-text mr-2">{{.Content}}</div>
+                    <div data-link-row class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
+                        <div class="flex items-start justify-between gap-2">
+                            <div class="min-w-0 flex-1">
+                                <div class="font-semibold text-text mb-1 break-all">{{.Filename}}</div>
+                                <div data-link-url class="text-subtext0 break-all">{{.Content}}</div>
+                            </div>
                             <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
-                                <button onclick="event.preventDefault(); event.stopPropagation(); copyToClipboard('{{.Content}}', this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy"><i class="fas fa-copy"></i></button>
-                                <button onclick="event.preventDefault(); event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
+                                <button onclick="showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Rename"><i class="fas fa-i-cursor"></i></button>
+                                <a href="{{.Content}}" target="_blank" rel="noopener noreferrer" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="在新标签页打开"><i class="fas fa-arrow-up-right-from-square"></i></a>
+                                <button onclick="copyToClipboard(this.closest('[data-link-row]').querySelector('[data-link-url]').textContent, this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy"><i class="fas fa-copy"></i></button>
+                                <button onclick="deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
                             </div>
                         </div>
-                    </a>
+                    </div>
                     {{end}}{{end}}
                 </div>
             </section>
@@ -219,6 +241,7 @@
             <h3 class="text-lg font-medium text-text mb-4">Add a new Link</h3>
             <form id="new-link-form" action="/submit" method="POST" enctype="multipart/form-data">
                 <input type="hidden" name="type" value="link">
+                <input type="text" name="name" required placeholder="Title" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl mb-3">
                 <input type="url" name="content" required placeholder="https://example.com" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl mb-6">
                 <div class="flex justify-end gap-4">
                     <button type="button" id="link-cancel-button" class="px-4 py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium">Cancel</button>
@@ -460,27 +483,79 @@
         }
 
         // Copy to clipboard function
-        function copyToClipboard(text, buttonElement) {
-            if (!navigator.clipboard) {
-                const textArea = document.createElement("textarea");
-                textArea.value = text;
-                document.body.appendChild(textArea);
-                textArea.focus();
-                textArea.select();
+        async function copyToClipboard(text, buttonElement) {
+            if (navigator.clipboard && window.isSecureContext) {
                 try {
-                    document.execCommand('copy');
+                    await navigator.clipboard.writeText(text);
                     showCopyFeedback(buttonElement);
+                    return;
                 } catch (err) {
-                    console.error('Fallback: Oops, unable to copy', err);
+                    console.warn('Clipboard API failed, using compatibility fallback:', err);
                 }
-                document.body.removeChild(textArea);
-                return;
             }
-            navigator.clipboard.writeText(text).then(function() {
-                showCopyFeedback(buttonElement);
-            }, function(err) {
-                console.error('Async: Could not copy text: ', err);
+
+            const scrollX = window.scrollX;
+            const scrollY = window.scrollY;
+            const activeElement = document.activeElement;
+            const selection = window.getSelection();
+            const savedRanges = [];
+            if (selection) {
+                for (let i = 0; i < selection.rangeCount; i++) {
+                    savedRanges.push(selection.getRangeAt(i).cloneRange());
+                }
+            }
+
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.setAttribute('readonly', '');
+            textArea.setAttribute('aria-hidden', 'true');
+            Object.assign(textArea.style, {
+                position: 'fixed',
+                top: '0',
+                left: '0',
+                width: '1px',
+                height: '1px',
+                padding: '0',
+                border: '0',
+                opacity: '0',
+                pointerEvents: 'none'
             });
+            document.body.appendChild(textArea);
+
+            let copied = false;
+            try {
+                textArea.focus({ preventScroll: true });
+                textArea.select();
+                textArea.setSelectionRange(0, textArea.value.length);
+                copied = document.execCommand('copy');
+            } catch (err) {
+                console.error('Unable to copy text:', err);
+            } finally {
+                textArea.remove();
+                if (activeElement && typeof activeElement.focus === 'function') {
+                    try {
+                        activeElement.focus({ preventScroll: true });
+                    } catch (_) {
+                        activeElement.focus();
+                    }
+                }
+                if (selection) {
+                    selection.removeAllRanges();
+                    savedRanges.forEach(range => selection.addRange(range));
+                }
+                window.scrollTo(scrollX, scrollY);
+            }
+
+            if (copied) {
+                showCopyFeedback(buttonElement);
+            }
+        }
+
+        function copyFileUrl(buttonElement) {
+            const fileRow = buttonElement.closest('[data-file-row]');
+            const viewPath = fileRow.querySelector('[data-file-view]').getAttribute('href');
+            const fileUrl = new URL(viewPath, window.location.href).href;
+            copyToClipboard(fileUrl, buttonElement);
         }
 
         function showCopyFeedback(buttonElement) {
