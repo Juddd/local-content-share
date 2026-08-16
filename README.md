@@ -157,4 +157,3 @@ proxy_connect_timeout 3600s;
 - 官方上游仓库：[Tanq16/local-content-share](https://github.com/Tanq16/local-content-share)
 
 本项目继续遵循上游仓库所采用的许可证。
-warning: /bin/bash: setlocale: LC_ALL: cannot change locale (C.UTF-8)
