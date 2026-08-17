@@ -1,7 +1,4 @@
 data
 local-content-share
-android-app/.gradle/
-android-app/build/
-android-app/app/build/
-android-app/local.properties
-android-app/signing.properties
+# The private Android client contains personal NAS endpoints and stays on the NAS only.
+android-app/
