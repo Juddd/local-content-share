@@ -1,7 +1,0 @@
-<network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">nas.yode.ink</domain>
-        <domain includeSubdomains="false">192.168.3.177</domain>
-    </domain-config>
-</network-security-config>
