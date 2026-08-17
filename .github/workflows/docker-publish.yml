@@ -2,6 +2,8 @@ name: Publish Personal Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: write
@@ -9,7 +11,7 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/juddd/local-content-share
-  RELEASE_TAG: v39.3
+  RELEASE_TAG: v39.4
 
 jobs:
   publish-image:
@@ -54,5 +56,5 @@ jobs:
             gh release create "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
               --title "Local Content Share 个人增强版 $RELEASE_TAG" \
-              --notes-file .github/release-notes-v39.3.md
+              --notes-file .github/release-notes-v39.4.md
           fi

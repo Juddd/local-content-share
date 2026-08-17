@@ -32,13 +32,13 @@ var (
 )
 
 type Entry struct {
-	ID         string
-	Content    string
-	Type       string
-	Filename   string
-	CreatedAt  time.Time
-	ModifiedAt time.Time
-	Size       int64
+	ID         string    `json:"id"`
+	Content    string    `json:"content"`
+	Type       string    `json:"type"`
+	Filename   string    `json:"filename"`
+	CreatedAt  time.Time `json:"createdAt"`
+	ModifiedAt time.Time `json:"modifiedAt"`
+	Size       int64     `json:"size"`
 }
 
 type ItemTimes struct{ CreatedAt, ModifiedAt time.Time }
@@ -476,6 +476,74 @@ func main() {
 
 	http.HandleFunc("/md", func(w http.ResponseWriter, r *http.Request) {
 		tmpl.ExecuteTemplate(w, "md.html", nil)
+	})
+
+	// Native client API: return all content without requiring HTML parsing.
+	http.HandleFunc("/api/v1/items", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		expirationTracker.CleanupExpired()
+		entries := []Entry{}
+		textFiles, _ := os.ReadDir(filepath.Join("data", "text"))
+		for _, file := range textFiles {
+			if file.IsDir() {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join("data", "text", file.Name()))
+			if err != nil {
+				continue
+			}
+			info, err := file.Info()
+			if err != nil {
+				continue
+			}
+			id := filepath.Join("text", file.Name())
+			times := itemTimeTracker.Get(id, info.ModTime())
+			entries = append(entries, Entry{ID: id, Type: "text", Content: string(data), Filename: file.Name(), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt})
+		}
+		files, _ := os.ReadDir(filepath.Join("data", "files"))
+		for _, file := range files {
+			if file.IsDir() {
+				continue
+			}
+			info, err := file.Info()
+			if err != nil {
+				continue
+			}
+			id := filepath.Join("files", file.Name())
+			times := itemTimeTracker.Get(id, info.ModTime())
+			entries = append(entries, Entry{ID: id, Type: "file", Filename: file.Name(), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size()})
+		}
+		linksData, err := os.ReadFile(filepath.Join("data", "links.file"))
+		if err == nil {
+			lines := strings.Split(strings.TrimSpace(string(linksData)), "\n")
+			linksInfo, _ := os.Stat(filepath.Join("data", "links.file"))
+			for index, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				stored, title, linkURL := line, line, line
+				if parts := strings.SplitN(line, "\t", 2); len(parts) == 2 {
+					title, linkURL = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+					if title == "" {
+						title = linkURL
+					}
+				}
+				fallback := time.Now().Add(time.Duration(index-len(lines)) * time.Second)
+				if linksInfo != nil {
+					fallback = linksInfo.ModTime().Add(time.Duration(index-len(lines)) * time.Second)
+				}
+				times := itemTimeTracker.Get("link/"+stored, fallback)
+				entries = append(entries, Entry{ID: "link/" + url.PathEscape(stored), Type: "link", Content: linkURL, Filename: title, CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt})
+			}
+		}
+		sort.SliceStable(entries, func(i, j int) bool { return entries[i].CreatedAt.After(entries[j].CreatedAt) })
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		json.NewEncoder(w).Encode(entries)
 	})
 
 	// Retrieve custom expiration options
