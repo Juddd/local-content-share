@@ -109,6 +109,29 @@
             gap: 1rem;
         }
 
+        .responsive-card-grid > * {
+            min-width: 0;
+        }
+
+        @media (max-width: 767px) {
+            .file-card {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .file-card-name {
+                width: 100%;
+                margin-right: 0;
+                padding: 0.25rem 0.25rem 0.375rem;
+            }
+
+            .file-card-actions {
+                align-self: flex-end;
+                justify-content: flex-end;
+                max-width: 100%;
+            }
+        }
+
         @media (min-width: 768px) {
             .responsive-card-grid {
                 grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
@@ -170,9 +193,9 @@
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Files</h2>{{template "section-sort" "files-list"}}</div>
                 <div id="files-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "file"}}
-                    <div data-file-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
-                        <div class="font-medium truncate text-text mr-2">{{.Filename}}</div>
-                        <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
+                    <div data-file-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="file-card flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
+                        <div class="file-card-name font-medium truncate text-text mr-2">{{.Filename}}</div>
+                        <div class="file-card-actions flex items-center gap-0 sm:gap-1 flex-shrink-0">
                             <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="重命名"><i class="fas fa-i-cursor"></i></button>
                             <a href="/download/{{.ID}}" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="下载"><i class="fas fa-download"></i></a>
                             <a data-file-view href="/view/{{.ID}}" target="_blank" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="查看"><i class="fas fa-eye"></i></a>
