@@ -120,8 +120,9 @@
 
     <div class="w-full max-w-none p-4 sm:p-6 lg:p-8">
 
-        <header class="text-center mb-8">
+        <header class="relative text-center mb-8">
             <h1 class="text-3xl sm:text-4xl font-bold text-mauve">Local-Content-Share</h1>
+            <button id="settings-button" type="button" class="absolute right-0 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="设置"><i class="fas fa-gear"></i></button>
         </header>
 
         <main class="flex flex-col gap-8">
@@ -147,7 +148,7 @@
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Snippets</h2>{{template "section-sort" "snippets-list"}}</div>
                 <div id="snippets-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "text"}}
-                    <div data-snippet-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
+                    <div data-snippet-row data-snippet-id="{{.ID}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
                         <div class="flex items-start justify-between gap-2 mb-2">
                             <div class="font-semibold text-text break-all min-w-0">{{.Filename}}</div>
                             <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
@@ -157,7 +158,7 @@
                             <button onclick="event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="删除"><i class="fas fa-trash"></i></button>
                             </div>
                         </div>
-                        <div data-snippet-content class="w-full whitespace-pre-wrap break-all text-subtext0{{if isTruncated .Content 600}} cursor-pointer{{end}}"{{if isTruncated .Content 600}} onclick="showViewModal('{{.ID}}', '{{.Filename}}')" title="点击查看全文"{{end}}>{{previewText .Content 600}}{{if isTruncated .Content 600}}… <span class="text-blue text-sm whitespace-nowrap">点击查看全文</span>{{end}}</div>
+                        <div data-snippet-content class="w-full whitespace-pre-wrap break-all text-subtext0">{{previewText .Content 600}}{{if isTruncated .Content 600}}… <span class="text-blue text-sm whitespace-nowrap">点击查看全文</span>{{end}}</div>
                         <div data-snippet-full class="hidden">{{.Content}}</div>
                     </div>
                     {{end}}{{end}}
@@ -206,6 +207,21 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="hidden fixed inset-0 bg-overlay2/70 dark:bg-black/70 flex items-center justify-center max-w-full p-4 z-50">
+        <div id="settings-modal-backdrop" class="absolute inset-0"></div>
+        <div class="bg-crust rounded-3xl p-6 w-full max-w-md z-10">
+            <h3 class="text-lg font-medium text-text mb-4">页面设置</h3>
+            <label for="snippet-preview-limit" class="block text-sm text-subtext1 mb-2">Snippet 正文预览字数</label>
+            <input id="snippet-preview-limit" type="number" min="1" max="100000" step="1" inputmode="numeric" class="w-full bg-base px-4 py-3 text-text focus:outline-none rounded-2xl mb-2">
+            <p class="text-xs text-overlay1 mb-6">正文超过该字数时折叠，默认 600 字。此设置仅保存在当前浏览器。</p>
+            <div class="flex justify-end gap-4">
+                <button type="button" id="settings-cancel-button" class="px-4 py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium">取消</button>
+                <button type="button" id="settings-save-button" class="px-4 py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors">保存</button>
+            </div>
+        </div>
     </div>
 
     <!-- New Item Modal -->
@@ -322,6 +338,64 @@
         const newItemModal = document.getElementById('new-item-modal');
         const progressContainer = document.getElementById('progress-container');
         const progressBar = document.getElementById('progress-bar');
+
+        // Browser-local page settings
+        const settingsModal = document.getElementById('settings-modal');
+        const settingsButton = document.getElementById('settings-button');
+        const settingsBackdrop = document.getElementById('settings-modal-backdrop');
+        const settingsCancelButton = document.getElementById('settings-cancel-button');
+        const settingsSaveButton = document.getElementById('settings-save-button');
+        const snippetPreviewLimitInput = document.getElementById('snippet-preview-limit');
+        const snippetPreviewStorageKey = 'snippetPreviewLimit';
+
+        function getSnippetPreviewLimit() {
+            const stored = Number.parseInt(localStorage.getItem(snippetPreviewStorageKey), 10);
+            return Number.isInteger(stored) && stored >= 1 && stored <= 100000 ? stored : 600;
+        }
+
+        function renderSnippetPreviews() {
+            const limit = getSnippetPreviewLimit();
+            document.querySelectorAll('[data-snippet-row]').forEach(row => {
+                const content = row.querySelector('[data-snippet-content]');
+                const fullText = row.querySelector('[data-snippet-full]').textContent;
+                const characters = Array.from(fullText);
+                const truncated = characters.length > limit;
+                content.replaceChildren(document.createTextNode(truncated ? characters.slice(0, limit).join('') + '… ' : fullText));
+                content.classList.toggle('cursor-pointer', truncated);
+                content.title = truncated ? '点击查看全文' : '';
+                content.onclick = truncated ? () => showViewModal(row.dataset.snippetId, row.dataset.title) : null;
+                if (truncated) {
+                    const hint = document.createElement('span');
+                    hint.className = 'text-blue text-sm whitespace-nowrap';
+                    hint.textContent = '点击查看全文';
+                    content.appendChild(hint);
+                }
+            });
+        }
+
+        function closeSettingsModal() { settingsModal.classList.add('hidden'); }
+        settingsButton.addEventListener('click', () => {
+            snippetPreviewLimitInput.value = getSnippetPreviewLimit();
+            settingsModal.classList.remove('hidden');
+            snippetPreviewLimitInput.focus();
+            snippetPreviewLimitInput.select();
+        });
+        settingsCancelButton.addEventListener('click', closeSettingsModal);
+        settingsBackdrop.addEventListener('click', closeSettingsModal);
+        settingsSaveButton.addEventListener('click', () => {
+            const value = Number.parseInt(snippetPreviewLimitInput.value, 10);
+            if (!Number.isInteger(value) || value < 1 || value > 100000) {
+                snippetPreviewLimitInput.reportValidity();
+                return;
+            }
+            localStorage.setItem(snippetPreviewStorageKey, String(value));
+            renderSnippetPreviews();
+            closeSettingsModal();
+        });
+        snippetPreviewLimitInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') settingsSaveButton.click();
+        });
+        renderSnippetPreviews();
 
         // Reset the New Item modal
         function closeAndResetNewItemModal() {
