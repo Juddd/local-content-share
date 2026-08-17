@@ -38,6 +38,7 @@ public class MainActivity extends Activity {
     private Button notepadSave;
     private String pendingExpiry = "Never";
     private final Map<String, TextView> tabViews = new LinkedHashMap<>();
+    private final ArrayList<Uri> pendingSharedFiles = new ArrayList<>();
 
     static class Item {
         String id, type, filename, content, createdAt, modifiedAt;
@@ -55,7 +56,43 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("content-transfer", MODE_PRIVATE);
         buildUi();
         loadCache();
+        collectSharedFiles(getIntent());
         refresh();
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        collectSharedFiles(intent);
+        if (activeNetwork != null) processSharedFiles(); else refresh();
+    }
+
+    private void collectSharedFiles(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (Intent.ACTION_SEND.equals(action)) {
+            Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (uri != null) pendingSharedFiles.add(uri);
+        } else if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+            ArrayList<Uri> uris = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+            if (uris != null) pendingSharedFiles.addAll(uris);
+        }
+        if (!pendingSharedFiles.isEmpty()) {
+            section = "file";
+            updateTabs();
+            renderSection();
+            setStatus("已接收 " + pendingSharedFiles.size() + " 个文件，正在连接…");
+        }
+        intent.setAction(null);
+    }
+
+    private void processSharedFiles() {
+        if (pendingSharedFiles.isEmpty()) return;
+        ArrayList<Uri> files = new ArrayList<>(pendingSharedFiles);
+        pendingSharedFiles.clear();
+        pendingExpiry = "Never";
+        toast("正在上传 " + files.size() + " 个文件到 Files");
+        for (Uri uri : files) upload(uri);
     }
 
     private TextView text(String value, float sp, int color) {
@@ -131,8 +168,8 @@ public class MainActivity extends Activity {
                 if(wifi!=null) try { raw=read(connection(wifi,LAN_BASE+"/api/v1/items",1200)); activeBase=LAN_BASE; activeNetwork=wifi; } catch(Exception ignored) {}
                 if(raw==null) { Network net=findNetwork(false); raw=read(connection(net,REMOTE_BASE+"/api/v1/items",7000)); activeBase=REMOTE_BASE; activeNetwork=net; }
                 JSONArray data=new JSONArray(raw); prefs.edit().putString("items",data.toString()).apply();
-                runOnUiThread(()->{try{parseItems(data);}catch(Exception ignored){} status.setText((activeBase.equals(LAN_BASE)?"局域网直连":"异地服务器")+" · 已同步");});
-            } catch(Exception e) { setStatus("离线显示缓存 · "+e.getMessage()); }
+                runOnUiThread(()->{try{parseItems(data);}catch(Exception ignored){} status.setText((activeBase.equals(LAN_BASE)?"局域网直连":"异地服务器")+" · 已同步");processSharedFiles();});
+            } catch(Exception e) { setStatus("离线显示缓存 · "+e.getMessage()); runOnUiThread(this::processSharedFiles); }
         });
     }
 
