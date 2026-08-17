@@ -4,6 +4,8 @@ import android.app.*;
 import android.content.*;
 import android.database.Cursor;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.net.*;
 import android.os.*;
 import android.provider.MediaStore;
@@ -35,6 +37,7 @@ public class MainActivity extends Activity {
     private EditText notepad;
     private Button notepadSave;
     private String pendingExpiry = "Never";
+    private final Map<String, TextView> tabViews = new LinkedHashMap<>();
 
     static class Item {
         String id, type, filename, content, createdAt, modifiedAt;
@@ -58,28 +61,34 @@ public class MainActivity extends Activity {
     private TextView text(String value, float sp, int color) {
         TextView v = new TextView(this); v.setText(value); v.setTextSize(sp); v.setTextColor(color); v.setPadding(dp(12),dp(10),dp(12),dp(10)); return v;
     }
-    private Button button(String label) { Button b=new Button(this); b.setText(label); b.setAllCaps(false); return b; }
+    private GradientDrawable rounded(int color,int radius) { GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d; }
+    private Button button(String label) { Button b=new Button(this);b.setText(label);b.setAllCaps(false);b.setTextSize(14);b.setMinHeight(0);b.setMinimumHeight(0);b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(dp(16),dp(10),dp(16),dp(10));b.setBackground(rounded(Color.rgb(235,229,239),18));return b; }
+    private TextView iconButton(String symbol,String description) { TextView v=text(symbol,23,Color.rgb(73,62,80));v.setGravity(Gravity.CENTER);v.setContentDescription(description);v.setBackground(rounded(Color.rgb(235,229,239),22));v.setPadding(0,0,0,0);return v; }
+    private TextView actionChip(String label,boolean primary) { TextView v=text(label,14,primary?Color.WHITE:Color.rgb(73,62,80));v.setGravity(Gravity.CENTER);v.setTypeface(Typeface.DEFAULT,Typeface.BOLD);v.setBackground(rounded(primary?Color.rgb(103,80,164):Color.rgb(235,229,239),20));v.setPadding(dp(18),dp(10),dp(18),dp(10));return v; }
     private int dp(int n) { return (int)(n*getResources().getDisplayMetrics().density+.5f); }
 
     private void buildUi() {
-        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(8),dp(8),dp(8),0); root.setBackgroundColor(Color.rgb(247,242,250));
-        LinearLayout title = new LinearLayout(this); title.setGravity(Gravity.CENTER_VERTICAL);
-        TextView heading=text("内容中转",24,Color.rgb(55,48,60)); heading.setTypeface(null,1); title.addView(heading,new LinearLayout.LayoutParams(0,-2,1));
-        Button settings=button("设置"); settings.setOnClickListener(v->showSettings()); title.addView(settings);
-        Button refresh=button("刷新"); refresh.setOnClickListener(v->refresh()); title.addView(refresh); root.addView(title);
-        status=text("正在连接…",12,Color.DKGRAY); status.setPadding(dp(12),0,dp(12),dp(4)); root.addView(status);
-        toolbar=new LinearLayout(this); toolbar.setGravity(Gravity.CENTER); toolbar.setWeightSum(4);
+        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(12),dp(10),dp(12),0); root.setBackgroundColor(Color.rgb(250,247,252));
+        root.setOnApplyWindowInsetsListener((view,insets)->{int top=Build.VERSION.SDK_INT>=30?insets.getInsets(WindowInsets.Type.statusBars()).top:insets.getSystemWindowInsetTop();view.setPadding(dp(12),top+dp(10),dp(12),0);return insets;});
+        LinearLayout title = new LinearLayout(this); title.setGravity(Gravity.CENTER_VERTICAL);title.setPadding(dp(4),0,dp(4),dp(4));
+        TextView heading=text("内容中转",23,Color.rgb(45,39,49)); heading.setTypeface(Typeface.DEFAULT,Typeface.BOLD);heading.setPadding(dp(4),dp(6),dp(8),dp(6)); title.addView(heading,new LinearLayout.LayoutParams(0,-2,1));
+        TextView settings=iconButton("⚙","设置"); settings.setOnClickListener(v->showSettings());LinearLayout.LayoutParams iconParams=new LinearLayout.LayoutParams(dp(44),dp(44));iconParams.setMarginStart(dp(8));title.addView(settings,iconParams);
+        TextView refresh=iconButton("↻","刷新"); refresh.setOnClickListener(v->refresh());LinearLayout.LayoutParams refreshParams=new LinearLayout.LayoutParams(dp(44),dp(44));refreshParams.setMarginStart(dp(8));title.addView(refresh,refreshParams); root.addView(title);
+        status=text("正在连接…",12,Color.rgb(96,87,101)); status.setPadding(dp(8),0,dp(8),dp(10)); root.addView(status);
+        toolbar=new LinearLayout(this); toolbar.setGravity(Gravity.CENTER); toolbar.setWeightSum(4);toolbar.setPadding(0,dp(2),0,dp(8));
         addTab("文字","text"); addTab("文件","file"); addTab("链接","link"); addTab("记事本","notepad"); root.addView(toolbar);
-        LinearLayout actions=new LinearLayout(this); actions.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
-        Button sort=button("排序"); sort.setOnClickListener(v->showSort()); actions.addView(sort);
-        Button add=button("新增"); add.setOnClickListener(v->addCurrent()); actions.addView(add); root.addView(actions);
+        LinearLayout actions=new LinearLayout(this); actions.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);actions.setPadding(0,0,dp(2),dp(8));
+        TextView sort=actionChip("⇅  排序",false); sort.setOnClickListener(v->showSort()); actions.addView(sort);
+        TextView add=actionChip("＋  新增",true); add.setOnClickListener(v->addCurrent());LinearLayout.LayoutParams addParams=new LinearLayout.LayoutParams(-2,-2);addParams.setMarginStart(dp(8));actions.addView(add,addParams); root.addView(actions);
         list=new ListView(this); adapter=new ItemAdapter(); list.setAdapter(adapter); root.addView(list,new LinearLayout.LayoutParams(-1,0,1));
         setContentView(root);
     }
 
     private void addTab(String label,String key) {
-        Button b=button(label); b.setOnClickListener(v->{section=key; renderSection();}); toolbar.addView(b,new LinearLayout.LayoutParams(0,-2,1));
+        TextView b=actionChip(label,false);b.setTextSize(14);b.setOnClickListener(v->{section=key;updateTabs();renderSection();});LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(44),1);p.setMargins(dp(3),0,dp(3),0);toolbar.addView(b,p);tabViews.put(key,b);if(key.equals(section))updateTabs();
     }
+
+    private void updateTabs(){for(Map.Entry<String,TextView> e:tabViews.entrySet()){boolean selected=e.getKey().equals(section);e.getValue().setTextColor(selected?Color.WHITE:Color.rgb(73,62,80));e.getValue().setBackground(rounded(selected?Color.rgb(103,80,164):Color.rgb(239,234,242),20));}}
 
     private void setStatus(String s) { runOnUiThread(()->status.setText(s)); }
 
