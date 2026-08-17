@@ -21,6 +21,8 @@ import java.text.DateFormat;
 import java.util.*;
 import java.util.concurrent.*;
 
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+
 public class MainActivity extends Activity {
     private static final String LAN_BASE = "http://192.168.3.177:8084";
     private static final String REMOTE_BASE = "http://nas.yode.ink:8084";
@@ -39,6 +41,7 @@ public class MainActivity extends Activity {
     private String pendingExpiry = "Never";
     private final Map<String, TextView> tabViews = new LinkedHashMap<>();
     private final ArrayList<Uri> pendingSharedFiles = new ArrayList<>();
+    private SwipeRefreshLayout swipeRefresh;
 
     static class Item {
         String id, type, filename, content, createdAt, modifiedAt;
@@ -118,7 +121,13 @@ public class MainActivity extends Activity {
         TextView sort=actionChip("⇅  排序",false); sort.setOnClickListener(v->showSort()); actions.addView(sort);
         TextView add=actionChip("＋  新增",true); add.setOnClickListener(v->addCurrent());LinearLayout.LayoutParams addParams=new LinearLayout.LayoutParams(-2,-2);addParams.setMarginStart(dp(8));actions.addView(add,addParams); root.addView(actions);
         list=new ListView(this); adapter=new ItemAdapter(); list.setAdapter(adapter); root.addView(list,new LinearLayout.LayoutParams(-1,0,1));
-        setContentView(root);
+        swipeRefresh = new SwipeRefreshLayout(this);
+        swipeRefresh.setColorSchemeColors(Color.rgb(103,80,164));
+        swipeRefresh.setProgressBackgroundColorSchemeColor(Color.WHITE);
+        swipeRefresh.setOnRefreshListener(this::refresh);
+        swipeRefresh.setOnChildScrollUpCallback((parent, child) -> section.equals("notepad") ? notepad != null && notepad.canScrollVertically(-1) : list.canScrollVertically(-1));
+        swipeRefresh.addView(root,new SwipeRefreshLayout.LayoutParams(-1,-1));
+        setContentView(swipeRefresh);
     }
 
     private void addTab(String label,String key) {
@@ -161,6 +170,7 @@ public class MainActivity extends Activity {
     }
 
     private void refresh() {
+        if (swipeRefresh != null && !swipeRefresh.isRefreshing()) swipeRefresh.setRefreshing(true);
         setStatus("正在同步…");
         io.execute(()->{
             try {
@@ -168,8 +178,8 @@ public class MainActivity extends Activity {
                 if(wifi!=null) try { raw=read(connection(wifi,LAN_BASE+"/api/v1/items",1200)); activeBase=LAN_BASE; activeNetwork=wifi; } catch(Exception ignored) {}
                 if(raw==null) { Network net=findNetwork(false); raw=read(connection(net,REMOTE_BASE+"/api/v1/items",7000)); activeBase=REMOTE_BASE; activeNetwork=net; }
                 JSONArray data=new JSONArray(raw); prefs.edit().putString("items",data.toString()).apply();
-                runOnUiThread(()->{try{parseItems(data);}catch(Exception ignored){} status.setText((activeBase.equals(LAN_BASE)?"局域网直连":"异地服务器")+" · 已同步");processSharedFiles();});
-            } catch(Exception e) { setStatus("离线显示缓存 · "+e.getMessage()); runOnUiThread(this::processSharedFiles); }
+                runOnUiThread(()->{try{parseItems(data);}catch(Exception ignored){} status.setText((activeBase.equals(LAN_BASE)?"局域网直连":"异地服务器")+" · 已同步");swipeRefresh.setRefreshing(false);processSharedFiles();});
+            } catch(Exception e) { setStatus("离线显示缓存 · "+e.getMessage()); runOnUiThread(()->{swipeRefresh.setRefreshing(false);processSharedFiles();}); }
         });
     }
 
