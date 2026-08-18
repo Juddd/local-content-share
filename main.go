@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -684,8 +685,17 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := r.ParseMultipartForm(100 << 20); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		contentType := r.Header.Get("Content-Type")
+		var parseErr error
+		if strings.HasPrefix(contentType, "multipart/form-data") {
+			parseErr = r.ParseMultipartForm(100 << 20)
+		} else if strings.HasPrefix(contentType, "application/x-www-form-urlencoded") {
+			parseErr = r.ParseForm()
+		} else {
+			parseErr = fmt.Errorf("unsupported Content-Type: %s", contentType)
+		}
+		if parseErr != nil {
+			http.Error(w, parseErr.Error(), http.StatusBadRequest)
 			return
 		}
 		entryType := r.FormValue("type")
@@ -723,7 +733,10 @@ func main() {
 			log.Printf("Saved link %s\n", content)
 		} else {
 			// Handle file and text submission
-			files := r.MultipartForm.File["file-upload"]
+			var files []*multipart.FileHeader
+			if r.MultipartForm != nil {
+				files = r.MultipartForm.File["file-upload"]
+			}
 			if len(files) > 0 {
 				// File submission
 				for _, fileHeader := range files {
