@@ -4,6 +4,9 @@ WORKDIR /app
 
 COPY . .
 
+# Resolve Go module checksums during the image build.
+RUN go mod download
+
 # Build the application
 RUN go build -ldflags="-s -w" -o local-content-share .
 

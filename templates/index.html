@@ -136,6 +136,53 @@
             .responsive-card-grid {
                 grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
             }
+
+            #files-list {
+                grid-template-columns: repeat(auto-fit, minmax(28rem, 1fr));
+            }
+
+            #links-list {
+                grid-template-columns: repeat(auto-fit, minmax(24rem, 1fr));
+            }
+        }
+
+        .file-card,
+        .link-card {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .file-card-name,
+        .link-card-name {
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            overflow: hidden;
+            overflow-wrap: anywhere;
+            line-height: 1.4;
+        }
+
+        .file-card-thumb {
+            width: auto;
+            height: 2.8rem;
+            max-width: 5rem;
+            object-fit: contain;
+            flex: 0 0 auto;
+            border-radius: 0.5rem;
+            background: var(--base);
+        }
+
+        .file-card-info {
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+
+        .file-card-actions,
+        .link-card-actions {
+            align-self: flex-end;
+            justify-content: flex-end;
+            width: 100%;
+            margin-top: 0.5rem;
         }
     </style>
 </head>
@@ -193,8 +240,11 @@
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Files</h2>{{template "section-sort" "files-list"}}</div>
                 <div id="files-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "file"}}
-                    <div data-file-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="file-card flex items-center justify-between bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-2 transition-colors duration-300">
-                        <div class="file-card-name font-medium truncate text-text mr-2">{{.Filename}}</div>
+                    <div data-file-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="file-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <img class="file-card-thumb" src="/thumbnail/{{.ID}}" alt="" loading="lazy" onerror="this.style.display='none'">
+                            <div class="file-card-info"><div class="file-card-name font-medium text-text mr-2" title="{{.Filename}}">{{.Filename}}</div></div>
+                        </div>
                         <div class="file-card-actions flex items-center gap-0 sm:gap-1 flex-shrink-0">
                             <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="重命名"><i class="fas fa-i-cursor"></i></button>
                             <a href="/download/{{.ID}}" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="下载"><i class="fas fa-download"></i></a>
@@ -210,22 +260,20 @@
             <!-- Links Section -->
             <section class="content-section">
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Links</h2>{{template "section-sort" "links-list"}}</div>
-                <div id="links-list" class="flex flex-col gap-2">
+                <div id="links-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "link"}}
-                    <div data-link-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
-                        <div class="flex items-start justify-between gap-2">
-                            <div class="min-w-0 flex-1">
-                                <div class="font-semibold text-text mb-1 break-all">{{.Filename}}</div>
+                    <div data-link-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
+                        <div class="min-w-0 flex-1">
+                                <div class="link-card-name font-semibold text-text mb-1" title="{{.Filename}}">{{.Filename}}</div>
                                 <div data-link-url class="text-subtext0 break-all">{{.Content}}</div>
                             </div>
-                            <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
+                            <div class="link-card-actions flex items-center gap-0 sm:gap-1 flex-shrink-0">
                                 <button onclick="showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Rename"><i class="fas fa-i-cursor"></i></button>
                                 <a href="{{.Content}}" target="_blank" rel="noopener noreferrer" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="在新标签页打开"><i class="fas fa-arrow-up-right-from-square"></i></a>
                                 <button onclick="copyToClipboard(this.closest('[data-link-row]').querySelector('[data-link-url]').textContent, this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy"><i class="fas fa-copy"></i></button>
                                 <button onclick="deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
                             </div>
                         </div>
-                    </div>
                     {{end}}{{end}}
                 </div>
             </section>
@@ -253,7 +301,8 @@
         <div class="bg-crust rounded-3xl p-4 w-full max-w-lg z-10">
             <form id="new-item-form" action="/submit" method="POST" enctype="multipart/form-data">
                 <input type="hidden" name="expiry" id="expiryValue" value="Never">
-                <div class="mb-4">
+                <div id="file-source-tabs" class="grid grid-cols-2 gap-2 mb-4 hidden"><button type="button" id="source-upload" class="py-2 rounded-xl bg-blue text-crust font-semibold">上传文件</button><button type="button" id="source-url" class="py-2 rounded-xl bg-base text-subtext0">从 URL 下载</button></div>
+                <div id="upload-source-panel" class="mb-4">
                     <label for="file-upload" class="flex flex-col items-center justify-center w-full h-32 border-2 border-surface0 border-dashed rounded-2xl cursor-pointer bg-base hover:bg-surface0 transition-all">
                         <div class="flex flex-col items-center justify-center pt-5 pb-6">
                             <i class="fas fa-cloud-upload-alt text-3xl text-overlay2 mb-2"></i>
@@ -263,6 +312,7 @@
                         <input id="file-upload" name="file-upload" type="file" class="hidden" multiple />
                     </label>
                 </div>
+                <div id="url-source-panel" class="mb-4 hidden"><label class="block text-sm text-subtext1 mb-2">文件 URL</label><input type="url" name="url" placeholder="https://example.com/file.zip" class="w-full bg-base px-4 py-3 text-text rounded-2xl" disabled><p class="text-xs text-subtext0 mt-2">名称留空时自动读取响应头或 URL 中的文件名</p></div>
                 <div class="mb-4">
                      <input type="text" name="name" placeholder="名称（可选）" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl">
                 </div>
@@ -434,15 +484,19 @@
             fileNameDisplay.textContent = '';
             progressContainer.classList.add('hidden');
             progressBar.style.width = '0%';
+            setFileSource('upload');
         }
 
         // Modal handling for New Item
         const newButton = document.getElementById('new-button');
         const cancelButton = document.getElementById('cancel-button');
         const modalBackdrop = document.getElementById('modal-backdrop');
-        newButton.addEventListener('click', () => newItemModal.classList.remove('hidden'));
+        newButton.addEventListener('click', () => { sourceTabs.classList.remove('hidden'); newItemModal.classList.remove('hidden'); });
         cancelButton.addEventListener('click', closeAndResetNewItemModal);
         modalBackdrop.addEventListener('click', closeAndResetNewItemModal);
+        const sourceTabs=document.getElementById('file-source-tabs'),uploadPanel=document.getElementById('upload-source-panel'),urlPanel=document.getElementById('url-source-panel'),sourceUpload=document.getElementById('source-upload'),sourceUrl=document.getElementById('source-url');
+        function setFileSource(mode){const urlMode=mode==='url';uploadPanel.style.display=urlMode?'none':'block';urlPanel.style.display=urlMode?'block':'none';fileInput.disabled=urlMode;urlPanel.querySelector('[name="url"]').disabled=!urlMode;newItemForm.action=urlMode?'/download-url':'/submit';sourceUpload.className='py-2 rounded-xl '+(!urlMode?'bg-blue text-crust font-semibold':'bg-base text-subtext0');sourceUrl.className='py-2 rounded-xl '+(urlMode?'bg-blue text-crust font-semibold':'bg-base text-subtext0');}
+        sourceUpload.addEventListener('click',()=>setFileSource('upload'));sourceUrl.addEventListener('click',()=>setFileSource('url'));
 
         // Modal handling for New Link
         const newLinkButton = document.getElementById('new-link-button');
@@ -625,6 +679,7 @@
             form.querySelector('[name="name"]').disabled = true; 
             form.querySelector('[name="content"]').value = content;
             form.querySelector('[name="file-upload"]').parentElement.parentElement.style.display = 'none';
+            sourceTabs.classList.add('hidden');
             newItemModal.classList.remove('hidden');
         }
 
@@ -809,12 +864,12 @@
                 if (xhr.status >= 200 && xhr.status < 300) {
                     window.location.reload();
                 } else {
-                    console.error('Upload failed:', xhr.statusText);
+                    alert(xhr.responseText || `操作失败（HTTP ${xhr.status}）`);
                     progressContainer.classList.add('hidden');
                 }
             };
             xhr.onerror = function() {
-                console.error('An error occurred during the upload.');
+                alert('网络错误，无法完成操作');
                 progressContainer.classList.add('hidden');
             };
             xhr.send(formData);
