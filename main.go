@@ -1198,3 +1198,220 @@ func main() {
 		log.Printf("Renamed %s to %s\n", oldPath, newName)
 	})
 
+	http.HandleFunc("/raw/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/raw/")
+		if !strings.HasPrefix(id, "text/") {
+			http.Error(w, "Only text files can be accessed", http.StatusBadRequest)
+			return
+		}
+		content, err := os.ReadFile(filepath.Join("data", id))
+		if err != nil {
+			http.Error(w, "File not found", 404)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(content)
+	})
+
+	http.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
+		filename := strings.TrimPrefix(r.URL.Path, "/download/")
+		filePath := filepath.Join("data", filename)
+		fileInfo, err := os.Stat(filePath)
+		if err != nil {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+		file, err := os.Open(filePath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+
+		// Brute force method to determine content type
+		ext := strings.ToLower(filepath.Ext(filename))
+		var contentType string
+		switch ext {
+		case ".pdf":
+			contentType = "application/pdf"
+		case ".jpg", ".jpeg":
+			contentType = "image/jpeg"
+		case ".png":
+			contentType = "image/png"
+		case ".gif":
+			contentType = "image/gif"
+		case ".svg":
+			contentType = "image/svg+xml"
+		default:
+			buffer := make([]byte, 512)
+			_, err = file.Read(buffer)
+			if err != nil && err != io.EOF {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			contentType = http.DetectContentType(buffer)
+			_, err = file.Seek(0, 0)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		baseFilename := filepath.Base(filename)
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", baseFilename))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, err = io.Copy(w, file)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("Served %s for download\n", filename)
+	})
+
+	http.HandleFunc("/view/", func(w http.ResponseWriter, r *http.Request) {
+		filename := strings.TrimPrefix(r.URL.Path, "/view/")
+		http.ServeFile(w, r, filepath.Join("data", filename))
+		log.Printf("Served %s for viewing\n", filename)
+	})
+
+	http.HandleFunc("/thumbnail/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/thumbnail/")
+		if !strings.HasPrefix(id, "files/") {
+			http.Error(w, "Only images can be thumbnailed", http.StatusBadRequest)
+			return
+		}
+		path, err := ensureThumbnail(id)
+		if err != nil {
+			http.Error(w, "Thumbnail unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		http.ServeFile(w, r, path)
+	})
+
+	http.HandleFunc("/delete/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/delete/")
+		// Handle link deletion
+		if after, ok := strings.CutPrefix(id, "link/"); ok {
+			linkToDelete := after
+			linksFilePath := filepath.Join("data", "links.file")
+			data, err := os.ReadFile(linksFilePath)
+			if err != nil {
+				http.Error(w, "Failed to read links file for deletion", http.StatusInternalServerError)
+				return
+			}
+			lines := strings.Split(string(data), "\n")
+			var newLines []string
+			var found bool
+			for _, line := range lines {
+				if strings.TrimSpace(line) == strings.TrimSpace(linkToDelete) && !found {
+					found = true // Remove only the first occurrence
+					continue
+				}
+				if strings.TrimSpace(line) != "" {
+					newLines = append(newLines, line)
+				}
+			}
+			output := strings.Join(newLines, "\n")
+			// Add newline for correctness
+			if output != "" {
+				output += "\n"
+			}
+			err = os.WriteFile(linksFilePath, []byte(output), 0644)
+			if err != nil {
+				http.Error(w, "Failed to write links file after deletion", http.StatusInternalServerError)
+				return
+			}
+			itemTimeTracker.Delete("link/" + linkToDelete)
+			notifyContentChange()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status": "ok"}`))
+			log.Printf("Deleted link %s\n", linkToDelete)
+			return
+		}
+		// Handle file and snippet deletion
+		err := os.Remove(filepath.Join("data", id))
+		if err != nil {
+			log.Printf("Failed to delete %s: %v", id, err)
+			http.Error(w, "Failed to delete file", http.StatusInternalServerError)
+			return
+		}
+		if strings.HasPrefix(id, "files/") {
+			_ = os.Remove(thumbnailPath(id))
+		}
+		itemTimeTracker.Delete(id)
+		expirationTracker.mu.Lock()
+		delete(expirationTracker.Expirations, id)
+		expirationTracker.saveToFile()
+		expirationTracker.mu.Unlock()
+		notifyContentChange()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status": "ok"}`))
+		log.Printf("Deleted %s\n", id)
+	})
+
+	http.HandleFunc("/edit/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/edit/")
+		if !strings.HasPrefix(id, "text/") {
+			http.Error(w, "Can only edit text snippets", http.StatusBadRequest)
+			return
+		}
+		content := r.FormValue("content")
+		if content == "" {
+			http.Error(w, "Content cannot be empty", http.StatusBadRequest)
+			return
+		}
+		filePath := filepath.Join("data", id)
+		info, statErr := os.Stat(filePath)
+		err := os.WriteFile(filePath, []byte(content), 0644)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if statErr == nil {
+			itemTimeTracker.Get(id, info.ModTime())
+		}
+		itemTimeTracker.Touch(id)
+		notifyContentChange()
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		log.Printf("Edited %s\n", id)
+	})
+
+	// SSE Updates for content refresh
+	http.HandleFunc("/api/updates", handleContentUpdates)
+
+	// Start server
+	log.Fatal(http.ListenAndServe(*listenAddress, nil))
+}
+
+// Helper function to create files if they don't exist
+func createFileIfNotExists(filename string, defaultContent string) {
+	dir := filepath.Dir(filepath.Join("data", filename))
+	if dir != "." && dir != "data" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			log.Printf("Error creating directory %s: %v\n", dir, err)
+		}
+	}
+	filePath := filepath.Join("data", filename)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		err := os.WriteFile(filePath, []byte(defaultContent), 0644)
+		if err != nil {
+			log.Printf("Error creating file %s: %v\n", filename, err)
+		} else {
+			log.Printf("Created file %s with default content\n", filename)
+		}
+	}
+}
