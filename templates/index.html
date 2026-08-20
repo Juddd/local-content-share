@@ -663,10 +663,10 @@
         renameCancelButton.addEventListener('click', () => renameModal.classList.add('hidden'));
         renameModalBackdrop.addEventListener('click', () => renameModal.classList.add('hidden'));
         renameForm.addEventListener('submit', (e) => {
-            if (!newNameInput.value) {
-                e.preventDefault(); 
-            }
-            renameModal.classList.add('hidden');
+            e.preventDefault();
+            if (!newNameInput.value) return;
+            const id=renameForm.action.split('/rename/')[1]; const row=document.querySelector(`[data-file-row], [data-snippet-row], [data-link-row]`);
+            fetch(renameForm.action,{method:'POST',body:new URLSearchParams({newname:newNameInput.value})}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);document.querySelectorAll(`[data-file-row], [data-snippet-row], [data-link-row]`).forEach(x=>{if(x.dataset.title===oldNameDisplay.textContent){x.dataset.title=newNameInput.value;const n=x.querySelector('.file-card-name,.link-card-name,[data-snippet-title]');if(n)n.textContent=newNameInput.value;}});renameModal.classList.add('hidden');}).catch(e=>alert('重命名失败：'+e.message));
         });
 
         // Edit form logic
@@ -842,6 +842,7 @@
 
         // New form submission with progress
         const newItemForm = document.getElementById('new-item-form');
+        async function refreshContentSections(){const html=await fetch('/').then(r=>r.text());const doc=new DOMParser().parseFromString(html,'text/html');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=doc.querySelectorAll('.content-section')[i];if(replacement)section.replaceWith(replacement);});renderSnippetPreviews();}
         newItemForm.addEventListener('submit', function(e) {
             e.preventDefault();
             const files = fileInput.files;
@@ -865,7 +866,8 @@
             };
             xhr.onload = function() {
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    window.location.reload();
+                    closeAndResetNewItemModal();
+                    refreshContentSections().catch(()=>window.location.reload());
                 } else {
                     alert(xhr.responseText || `操作失败（HTTP ${xhr.status}）`);
                     progressContainer.classList.add('hidden');
@@ -890,7 +892,7 @@
                     if (localMutationInFlight > 0) return;
                     const isModalOpen = document.querySelector('#new-item-modal:not(.hidden), #new-link-modal:not(.hidden), #rename-modal:not(.hidden), #view-snippet-modal:not(.hidden), #confirmation-modal:not(.hidden)');
                     if (!isModalOpen) {
-                        setTimeout(() => { window.location.reload(); }, 250);
+                        setTimeout(() => { refreshContentSections().catch(()=>{}); }, 250);
                     }
                 }
             };
