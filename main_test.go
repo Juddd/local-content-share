@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPublicDownloadURLRejectsPrivateAddresses(t *testing.T) {
@@ -84,6 +87,12 @@ func TestStreamUploadHandlerSavesMultipartFile(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
+	var response struct {
+		Items []Entry `json:"items"`
+	}
+	if err = json.Unmarshal(rec.Body.Bytes(), &response); err != nil || len(response.Items) != 1 || response.Items[0].Filename != "sample.txt" {
+		t.Fatalf("unexpected upload response: %s (%v)", rec.Body.String(), err)
+	}
 	data, err := os.ReadFile(filepath.Join("data", "files", "sample.txt"))
 	if err != nil {
 		t.Fatal(err)
@@ -97,5 +106,81 @@ func TestStreamUploadHandlerSavesMultipartFile(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("temporary uploads remain: %v", matches)
+	}
+}
+
+func TestURLDownloadTaskReportsCompletionAndItem(t *testing.T) {
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	if err = os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+	if err = os.MkdirAll("data/files", 0755); err != nil {
+		t.Fatal(err)
+	}
+	itemTimeTracker = initItemTimeTracker()
+	expirationTracker = initExpirationTracker()
+	downloadTasks = downloadTaskStore{tasks: map[string]*DownloadTask{}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "12")
+		_, _ = io.WriteString(w, "task payload")
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL + "/remote.bin")
+	id := "test-complete"
+	ctx, cancel := context.WithCancel(context.Background())
+	downloadTasks.tasks[id] = &DownloadTask{ID: id, Status: "queued", Total: -1, cancel: cancel}
+	runURLDownloadTaskWithClient(ctx, id, u, "saved.bin", "Never", server.Client().Transport)
+	task, ok := downloadTasks.snapshot(id)
+	if !ok || task.Status != "completed" || task.Received != 12 || task.Total != 12 || task.Item == nil || task.Item.Filename != "saved.bin" {
+		t.Fatalf("unexpected task: %+v", task)
+	}
+	if data, err := os.ReadFile("data/files/saved.bin"); err != nil || string(data) != "task payload" {
+		t.Fatalf("unexpected saved file: %q (%v)", data, err)
+	}
+}
+
+func TestURLDownloadTaskCancellationRemovesTemporaryFile(t *testing.T) {
+	oldDir, _ := os.Getwd()
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+	_ = os.MkdirAll("data/files", 0755)
+	itemTimeTracker = initItemTimeTracker()
+	expirationTracker = initExpirationTracker()
+	downloadTasks = downloadTaskStore{tasks: map[string]*DownloadTask{}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher := w.(http.Flusher)
+		for i := 0; i < 50; i++ {
+			_, _ = w.Write(bytes.Repeat([]byte("x"), 1024))
+			flusher.Flush()
+			time.Sleep(10 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL + "/slow.bin")
+	id := "test-cancel"
+	ctx, cancel := context.WithCancel(context.Background())
+	downloadTasks.tasks[id] = &DownloadTask{ID: id, Status: "queued", Total: -1, cancel: cancel}
+	done := make(chan struct{})
+	go func() {
+		runURLDownloadTaskWithClient(ctx, id, u, "cancelled.bin", "Never", server.Client().Transport)
+		close(done)
+	}()
+	time.Sleep(40 * time.Millisecond)
+	cancel()
+	<-done
+	task, _ := downloadTasks.snapshot(id)
+	if task.Status != "cancelled" {
+		t.Fatalf("unexpected task status: %+v", task)
+	}
+	if matches, _ := filepath.Glob("data/files/.url-download-*.tmp"); len(matches) != 0 {
+		t.Fatalf("temporary files remain: %v", matches)
 	}
 }

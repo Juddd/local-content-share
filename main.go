@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html/template"
@@ -46,6 +48,50 @@ type Entry struct {
 	CreatedAt  time.Time `json:"createdAt"`
 	ModifiedAt time.Time `json:"modifiedAt"`
 	Size       int64     `json:"size"`
+}
+
+type DownloadTask struct {
+	ID       string `json:"id"`
+	Status   string `json:"status"`
+	Filename string `json:"filename,omitempty"`
+	Received int64  `json:"received"`
+	Total    int64  `json:"total"`
+	Error    string `json:"error,omitempty"`
+	Item     *Entry `json:"item,omitempty"`
+	cancel   context.CancelFunc
+}
+
+type downloadTaskStore struct {
+	sync.Mutex
+	tasks map[string]*DownloadTask
+}
+
+var downloadTasks = downloadTaskStore{tasks: map[string]*DownloadTask{}}
+
+func (s *downloadTaskStore) snapshot(id string) (DownloadTask, bool) {
+	s.Lock()
+	defer s.Unlock()
+	t, ok := s.tasks[id]
+	if !ok {
+		return DownloadTask{}, false
+	}
+	copy := *t
+	copy.cancel = nil
+	return copy, true
+}
+
+func (s *downloadTaskStore) update(id string, update func(*DownloadTask)) {
+	s.Lock()
+	defer s.Unlock()
+	if task := s.tasks[id]; task != nil {
+		update(task)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
 }
 
 type ItemTimes struct{ CreatedAt, ModifiedAt time.Time }
@@ -95,38 +141,39 @@ func downloadFilename(resp *http.Response, u *url.URL, requested string) string 
 	return "download-" + time.Now().Format("20060102-150405")
 }
 
-func saveStreamedFile(r *http.Request, expiry, requestedName string) error {
+func saveStreamedFile(r *http.Request, expiry, requestedName string) ([]Entry, error) {
 	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	boundary := params["boundary"]
 	if boundary == "" {
-		return fmt.Errorf("missing multipart boundary")
+		return nil, fmt.Errorf("missing multipart boundary")
 	}
 	mr := multipart.NewReader(r.Body, boundary)
 	var expiryValue string
 	saved := false
+	var entries []Entry
 	for {
 		part, e := mr.NextPart()
 		if e == io.EOF {
 			break
 		}
 		if e != nil {
-			return e
+			return nil, e
 		}
 		field := part.FormName()
 		if field == "expiry" {
 			b, e := io.ReadAll(io.LimitReader(part, 1<<20))
 			if e != nil {
-				return e
+				return nil, e
 			}
 			expiryValue = string(b)
 			continue
 		}
 		if field == "name" {
 			if _, e := io.Copy(io.Discard, io.LimitReader(part, 1<<20)); e != nil {
-				return e
+				return nil, e
 			}
 			continue
 		}
@@ -143,7 +190,7 @@ func saveStreamedFile(r *http.Request, expiry, requestedName string) error {
 		unique := generateUniqueFilename("data/files", name)
 		tmp, e := os.CreateTemp("data/files", ".upload-*.tmp")
 		if e != nil {
-			return e
+			return nil, e
 		}
 		tmpName := tmp.Name()
 		ok := false
@@ -155,16 +202,16 @@ func saveStreamedFile(r *http.Request, expiry, requestedName string) error {
 		}()
 		n, e := io.Copy(tmp, io.LimitReader(part, maxFileSize+1))
 		if e != nil {
-			return e
+			return nil, e
 		}
 		if n > maxFileSize {
-			return fmt.Errorf("file exceeds 4 GB")
+			return nil, fmt.Errorf("file exceeds 4 GB")
 		}
 		if e = tmp.Close(); e != nil {
-			return e
+			return nil, e
 		}
 		if e = os.Rename(tmpName, filepath.Join("data/files", unique)); e != nil {
-			return e
+			return nil, e
 		}
 		ok = true
 		id := filepath.Join("files", unique)
@@ -172,13 +219,16 @@ func saveStreamedFile(r *http.Request, expiry, requestedName string) error {
 		if expiryValue != "" && expiryValue != "Never" {
 			expirationTracker.SetExpiration(id, expiryValue)
 		}
+		if entry, entryErr := fileEntry(id); entryErr == nil {
+			entries = append(entries, *entry)
+		}
 		saved = true
 	}
 	if !saved {
-		return fmt.Errorf("file-upload field is required")
+		return nil, fmt.Errorf("file-upload field is required")
 	}
 	_ = expiry
-	return nil
+	return entries, nil
 }
 
 func thumbnailPath(id string) string { return filepath.Join(thumbnailDir, id+".jpg") }
@@ -188,7 +238,8 @@ func streamUploadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := saveStreamedFile(r, "", ""); err != nil {
+	entries, err := saveStreamedFile(r, "", "")
+	if err != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "exceeds 4 GB") {
 			status = http.StatusRequestEntityTooLarge
@@ -199,7 +250,7 @@ func streamUploadHandler(w http.ResponseWriter, r *http.Request) {
 	notifyContentChange()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_, _ = w.Write([]byte(`{"status":"created"}`))
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": "created", "items": entries})
 }
 
 func ensureThumbnail(id string) (string, error) {
@@ -550,6 +601,158 @@ func notifyContentChange() {
 		default:
 		}
 	}
+}
+
+func fileEntry(id string) (*Entry, error) {
+	info, err := os.Stat(filepath.Join("data", filepath.FromSlash(id)))
+	if err != nil {
+		return nil, err
+	}
+	times := itemTimeTracker.Get(id, info.ModTime())
+	return &Entry{ID: id, Type: "file", Filename: filepath.Base(id), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size()}, nil
+}
+
+func startURLDownloadTask(rawURL, requestedName, expiry string) (DownloadTask, error) {
+	u, err := publicDownloadURL(strings.TrimSpace(rawURL))
+	if err != nil {
+		return DownloadTask{}, err
+	}
+	id := fmt.Sprintf("%d-%06d", time.Now().UnixNano(), rand.Intn(1000000))
+	ctx, cancel := context.WithCancel(context.Background())
+	task := &DownloadTask{ID: id, Status: "queued", Total: -1, cancel: cancel}
+	downloadTasks.Lock()
+	downloadTasks.tasks[id] = task
+	downloadTasks.Unlock()
+	go runURLDownloadTask(ctx, id, u, requestedName, expiry)
+	result, _ := downloadTasks.snapshot(id)
+	return result, nil
+}
+
+func failURLDownloadTask(id string, err error) {
+	status := "failed"
+	if errors.Is(err, context.Canceled) || downloadTaskCancelling(id) {
+		status = "cancelled"
+	}
+	downloadTasks.update(id, func(task *DownloadTask) {
+		task.Status = status
+		if status == "failed" {
+			task.Error = err.Error()
+		}
+		task.cancel = nil
+	})
+}
+
+func downloadTaskCancelling(id string) bool {
+	task, ok := downloadTasks.snapshot(id)
+	return ok && (task.Status == "cancelling" || task.Status == "cancelled")
+}
+
+func runURLDownloadTask(ctx context.Context, id string, u *url.URL, requestedName, expiry string) {
+	runURLDownloadTaskWithClient(ctx, id, u, requestedName, expiry, nil)
+}
+
+func runURLDownloadTaskWithClient(ctx context.Context, id string, u *url.URL, requestedName, expiry string, transport http.RoundTripper) {
+	client := &http.Client{Timeout: 30 * time.Minute, Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		_, err := publicDownloadURL(req.URL.String())
+		return err
+	}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		failURLDownloadTask(id, err)
+		return
+	}
+	downloadTasks.update(id, func(task *DownloadTask) { task.Status = "downloading" })
+	resp, err := client.Do(req)
+	if err != nil {
+		failURLDownloadTask(id, err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		failURLDownloadTask(id, fmt.Errorf("remote server returned %s", resp.Status))
+		return
+	}
+	if resp.ContentLength > maxURLDownloadSize {
+		failURLDownloadTask(id, fmt.Errorf("remote file exceeds 8 GB"))
+		return
+	}
+	name := downloadFilename(resp, u, requestedName)
+	unique := generateUniqueFilename("data/files", name)
+	downloadTasks.update(id, func(task *DownloadTask) {
+		task.Filename = unique
+		task.Total = resp.ContentLength
+	})
+	tmp, err := os.CreateTemp("data/files", ".url-download-*.tmp")
+	if err != nil {
+		failURLDownloadTask(id, err)
+		return
+	}
+	tmpName := tmp.Name()
+	completed := false
+	defer func() {
+		_ = tmp.Close()
+		if !completed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	buf := make([]byte, 128*1024)
+	var received int64
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			received += int64(n)
+			if received > maxURLDownloadSize {
+				failURLDownloadTask(id, fmt.Errorf("remote file exceeds 8 GB"))
+				return
+			}
+			if _, err = tmp.Write(buf[:n]); err != nil {
+				failURLDownloadTask(id, err)
+				return
+			}
+			downloadTasks.update(id, func(task *DownloadTask) { task.Received = received })
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			failURLDownloadTask(id, readErr)
+			return
+		}
+		if err = ctx.Err(); err != nil {
+			failURLDownloadTask(id, err)
+			return
+		}
+	}
+	if err = tmp.Close(); err != nil {
+		failURLDownloadTask(id, err)
+		return
+	}
+	dst := filepath.Join("data/files", unique)
+	if err = os.Rename(tmpName, dst); err != nil {
+		failURLDownloadTask(id, err)
+		return
+	}
+	completed = true
+	fileID := filepath.Join("files", unique)
+	itemTimeTracker.Create(fileID)
+	if expiry != "" && expiry != "Never" {
+		expirationTracker.SetExpiration(fileID, expiry)
+	}
+	entry, err := fileEntry(fileID)
+	if err != nil {
+		failURLDownloadTask(id, err)
+		return
+	}
+	downloadTasks.update(id, func(task *DownloadTask) {
+		task.Status = "completed"
+		task.Received = received
+		task.Item = entry
+		task.cancel = nil
+	})
+	notifyContentChange()
 }
 
 func main() {
@@ -1024,6 +1227,58 @@ func main() {
 			return
 		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
+	})
+
+	http.HandleFunc("/api/v1/download-tasks", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		task, err := startURLDownloadTask(r.FormValue("url"), r.FormValue("name"), r.FormValue("expiry"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, task)
+	})
+
+	http.HandleFunc("/api/v1/download-tasks/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/v1/download-tasks/")
+		if id == "" || strings.Contains(id, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			task, ok := downloadTasks.snapshot(id)
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			writeJSON(w, http.StatusOK, task)
+		case http.MethodDelete:
+			downloadTasks.Lock()
+			task := downloadTasks.tasks[id]
+			if task == nil {
+				downloadTasks.Unlock()
+				http.NotFound(w, r)
+				return
+			}
+			if task.cancel != nil && task.Status != "completed" && task.Status != "failed" && task.Status != "cancelled" {
+				task.Status = "cancelling"
+				task.cancel()
+			}
+			copy := *task
+			copy.cancel = nil
+			downloadTasks.Unlock()
+			writeJSON(w, http.StatusOK, copy)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
 
 	http.HandleFunc("/download-url", func(w http.ResponseWriter, r *http.Request) {
