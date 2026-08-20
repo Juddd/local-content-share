@@ -225,7 +225,7 @@
                             <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="重命名"><i class="fas fa-i-cursor"></i></button>
                             <button onclick="event.stopPropagation(); showEditForm('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="编辑"><i class="fas fa-pen"></i></button>
                             <button onclick="event.stopPropagation(); copyToClipboard(this.closest('[data-snippet-row]').querySelector('[data-snippet-full]').textContent, this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="复制"><i class="fas fa-copy"></i></button>
-                            <button onclick="event.stopPropagation(); deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="删除"><i class="fas fa-trash"></i></button>
+                            <button onclick="event.stopPropagation(); deleteItem('{{.ID}}', this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="删除"><i class="fas fa-trash"></i></button>
                             </div>
                         </div>
                         <div data-snippet-content class="w-full whitespace-pre-wrap break-all text-subtext0">{{previewText .Content 600}}{{if isTruncated .Content 600}}… <span class="text-blue text-sm whitespace-nowrap">点击查看全文</span>{{end}}</div>
@@ -271,7 +271,7 @@
                                 <button onclick="showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Rename"><i class="fas fa-i-cursor"></i></button>
                                 <a href="{{.Content}}" target="_blank" rel="noopener noreferrer" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="在新标签页打开"><i class="fas fa-arrow-up-right-from-square"></i></a>
                                 <button onclick="copyToClipboard(this.closest('[data-link-row]').querySelector('[data-link-url]').textContent, this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy"><i class="fas fa-copy"></i></button>
-                                <button onclick="deleteItem('{{.ID}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
+                                <button onclick="deleteItem('{{.ID}}', this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
                             </div>
                         </div>
                     {{end}}{{end}}
@@ -790,21 +790,24 @@
             confirmCallback = null;
         });
 
-        function deleteItem(id) {
+        let localMutationInFlight = 0;
+        function deleteItem(id, button) {
             showConfirmation(() => {
+                const row = button && button.closest('[data-file-row], [data-snippet-row], [data-link-row]');
+                if (row) { row.style.opacity = '0.45'; row.style.pointerEvents = 'none'; }
+                localMutationInFlight++;
                 fetch(`/delete/${id}`, {
                     method: 'POST'
                 })
-                .then(response => {
-                    if (response.ok) {
-                        window.location.reload();
-                    } else {
-                        console.error('Failed to delete the item.');
-                    }
+                .then(async response => {
+                    if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+                    if (row) row.remove();
                 })
                 .catch(error => {
-                    console.error('Error deleting item:', error);
-                });
+                    if (row) { row.style.opacity = ''; row.style.pointerEvents = ''; }
+                    alert(`删除失败：${error.message}`);
+                })
+                .finally(() => { setTimeout(() => { localMutationInFlight = Math.max(0, localMutationInFlight - 1); }, 800); });
             }, 'Delete Item?', `Are you sure you want to delete this item? This action is permanent.`);
         }
 
@@ -884,6 +887,7 @@
             evtSource = new EventSource("/api/updates");
             evtSource.onmessage = function(event) {
                 if (event.data === "content_updated") {
+                    if (localMutationInFlight > 0) return;
                     const isModalOpen = document.querySelector('#new-item-modal:not(.hidden), #new-link-modal:not(.hidden), #rename-modal:not(.hidden), #view-snippet-modal:not(.hidden), #confirmation-modal:not(.hidden)');
                     if (!isModalOpen) {
                         setTimeout(() => { window.location.reload(); }, 250);
