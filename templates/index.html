@@ -495,7 +495,7 @@
         cancelButton.addEventListener('click', closeAndResetNewItemModal);
         modalBackdrop.addEventListener('click', closeAndResetNewItemModal);
         const sourceTabs=document.getElementById('file-source-tabs'),uploadPanel=document.getElementById('upload-source-panel'),urlPanel=document.getElementById('url-source-panel'),sourceUpload=document.getElementById('source-upload'),sourceUrl=document.getElementById('source-url');
-        function setFileSource(mode){const urlMode=mode==='url';uploadPanel.style.display=urlMode?'none':'block';urlPanel.style.display=urlMode?'block':'none';fileInput.disabled=urlMode;urlPanel.querySelector('[name="url"]').disabled=!urlMode;newItemForm.action=urlMode?'/download-url':'/submit';sourceUpload.className='py-2 rounded-xl '+(!urlMode?'bg-blue text-crust font-semibold':'bg-base text-subtext0');sourceUrl.className='py-2 rounded-xl '+(urlMode?'bg-blue text-crust font-semibold':'bg-base text-subtext0');}
+        function setFileSource(mode){const urlMode=mode==='url';uploadPanel.style.display=urlMode?'none':'block';urlPanel.style.display=urlMode?'block':'none';fileInput.disabled=urlMode;urlPanel.querySelector('[name="url"]').disabled=!urlMode;newItemForm.action=urlMode?'/download-url':'/upload-stream';sourceUpload.className='py-2 rounded-xl '+(!urlMode?'bg-blue text-crust font-semibold':'bg-base text-subtext0');sourceUrl.className='py-2 rounded-xl '+(urlMode?'bg-blue text-crust font-semibold':'bg-base text-subtext0');}
         sourceUpload.addEventListener('click',()=>setFileSource('upload'));sourceUrl.addEventListener('click',()=>setFileSource('url'));
 
         // Modal handling for New Link

@@ -6,12 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"image"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"io/fs"
-	"image"
-	"image/jpeg"
-	_ "image/gif"
-	_ "image/png"
 	"log"
 	"math/rand"
 	"mime"
@@ -57,34 +57,220 @@ type ItemTimeTracker struct {
 var itemTimeTracker *ItemTimeTracker
 
 const thumbnailDir = "data/thumbnails"
+const maxFileSize int64 = 4 << 30
 
 func publicDownloadURL(raw string) (*url.URL, error) {
-	u,err:=url.Parse(raw); if err!=nil || (u.Scheme!="http"&&u.Scheme!="https") || u.Hostname()=="" { return nil,fmt.Errorf("invalid HTTP URL") }
-	addrs,err:=net.LookupIP(u.Hostname()); if err!=nil{return nil,err}; for _,ip:=range addrs { if ip.IsLoopback()||ip.IsPrivate()||ip.IsLinkLocalUnicast()||ip.IsUnspecified(){return nil,fmt.Errorf("private network URL is not allowed")} }; return u,nil
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return nil, fmt.Errorf("invalid HTTP URL")
+	}
+	addrs, err := net.LookupIP(u.Hostname())
+	if err != nil {
+		return nil, err
+	}
+	for _, ip := range addrs {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			return nil, fmt.Errorf("private network URL is not allowed")
+		}
+	}
+	return u, nil
 }
 
-func downloadFilename(resp *http.Response,u *url.URL,requested string) string {
-	if n:=strings.TrimSpace(requested);n!="" {return filepath.Base(n)}
-	if _,p,err:=mime.ParseMediaType(resp.Header.Get("Content-Disposition"));err==nil {if n:=filepath.Base(p["filename"]);n!="."&&n!=""{return n}}
-	if n:=filepath.Base(u.Path);n!="."&&n!="/"&&n!=""{if x,e:=url.PathUnescape(n);e==nil{return x};return n};return "download-"+time.Now().Format("20060102-150405")
+func downloadFilename(resp *http.Response, u *url.URL, requested string) string {
+	if n := strings.TrimSpace(requested); n != "" {
+		return filepath.Base(n)
+	}
+	if _, p, err := mime.ParseMediaType(resp.Header.Get("Content-Disposition")); err == nil {
+		if n := filepath.Base(p["filename"]); n != "." && n != "" {
+			return n
+		}
+	}
+	if n := filepath.Base(u.Path); n != "." && n != "/" && n != "" {
+		if x, e := url.PathUnescape(n); e == nil {
+			return x
+		}
+		return n
+	}
+	return "download-" + time.Now().Format("20060102-150405")
+}
+
+func saveStreamedFile(r *http.Request, expiry, requestedName string) error {
+	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil {
+		return err
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return fmt.Errorf("missing multipart boundary")
+	}
+	mr := multipart.NewReader(r.Body, boundary)
+	var expiryValue string
+	saved := false
+	for {
+		part, e := mr.NextPart()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			return e
+		}
+		field := part.FormName()
+		if field == "expiry" {
+			b, e := io.ReadAll(io.LimitReader(part, 1<<20))
+			if e != nil {
+				return e
+			}
+			expiryValue = string(b)
+			continue
+		}
+		if field == "name" {
+			if _, e := io.Copy(io.Discard, io.LimitReader(part, 1<<20)); e != nil {
+				return e
+			}
+			continue
+		}
+		if field != "file-upload" {
+			continue
+		}
+		name := requestedName
+		if name == "" {
+			name = part.FileName()
+		}
+		if name == "" {
+			name = "upload.bin"
+		}
+		unique := generateUniqueFilename("data/files", name)
+		tmp, e := os.CreateTemp("data/files", ".upload-*.tmp")
+		if e != nil {
+			return e
+		}
+		tmpName := tmp.Name()
+		ok := false
+		defer func() {
+			tmp.Close()
+			if !ok {
+				os.Remove(tmpName)
+			}
+		}()
+		n, e := io.Copy(tmp, io.LimitReader(part, maxFileSize+1))
+		if e != nil {
+			return e
+		}
+		if n > maxFileSize {
+			return fmt.Errorf("file exceeds 4 GB")
+		}
+		if e = tmp.Close(); e != nil {
+			return e
+		}
+		if e = os.Rename(tmpName, filepath.Join("data/files", unique)); e != nil {
+			return e
+		}
+		ok = true
+		id := filepath.Join("files", unique)
+		itemTimeTracker.Create(id)
+		if expiryValue != "" && expiryValue != "Never" {
+			expirationTracker.SetExpiration(id, expiryValue)
+		}
+		saved = true
+	}
+	if !saved {
+		return fmt.Errorf("file-upload field is required")
+	}
+	_ = expiry
+	return nil
 }
 
 func thumbnailPath(id string) string { return filepath.Join(thumbnailDir, id+".jpg") }
 
+func streamUploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := saveStreamedFile(r, "", ""); err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "exceeds 4 GB") {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	notifyContentChange()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write([]byte(`{"status":"created"}`))
+}
+
 func ensureThumbnail(id string) (string, error) {
 	src := filepath.Join("data", filepath.FromSlash(id))
-	info, err := os.Stat(src); if err != nil { return "", err }
-	if filepath.Ext(src) == "" { return "", fmt.Errorf("not an image") }
-	if err := os.MkdirAll(filepath.Dir(thumbnailPath(id)), 0755); err != nil { return "", err }
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Ext(src) == "" {
+		return "", fmt.Errorf("not an image")
+	}
+	if err := os.MkdirAll(filepath.Dir(thumbnailPath(id)), 0755); err != nil {
+		return "", err
+	}
 	dst := thumbnailPath(id)
-	if ti, err := os.Stat(dst); err == nil && ti.ModTime().After(info.ModTime()) { return dst, nil }
-	f, err := os.Open(src); if err != nil { return "", err }; defer f.Close()
-	srcImg, _, err := image.Decode(f); if err != nil { return "", err }
-	maxW, maxH := 320, 180; b := srcImg.Bounds(); w,h:=b.Dx(),b.Dy(); scale:=1.0
-	if w>maxW || h>maxH { sw:=float64(maxW)/float64(w); sh:=float64(maxH)/float64(h); if sw<sh { scale=sw } else { scale=sh } }
-	dw,dh:=int(float64(w)*scale),int(float64(h)*scale); if dw<1 {dw=1}; if dh<1 {dh=1}
-	outImg:=image.NewRGBA(image.Rect(0,0,dw,dh)); for y:=0;y<dh;y++ { for x:=0;x<dw;x++ { sx:=b.Min.X+x*w/dw; sy:=b.Min.Y+y*h/dh; outImg.Set(x,y,srcImg.At(sx,sy)) } }
-	tmp:=dst+".tmp"; out,err:=os.Create(tmp); if err!=nil{return "",err}; encErr:=jpeg.Encode(out,outImg,&jpeg.Options{Quality:82}); closeErr:=out.Close(); if encErr!=nil{return "",encErr}; if closeErr!=nil{return "",closeErr}; if err=os.Rename(tmp,dst);err!=nil{return "",err}; return dst,nil
+	if ti, err := os.Stat(dst); err == nil && ti.ModTime().After(info.ModTime()) {
+		return dst, nil
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	srcImg, _, err := image.Decode(f)
+	if err != nil {
+		return "", err
+	}
+	maxW, maxH := 320, 180
+	b := srcImg.Bounds()
+	w, h := b.Dx(), b.Dy()
+	scale := 1.0
+	if w > maxW || h > maxH {
+		sw := float64(maxW) / float64(w)
+		sh := float64(maxH) / float64(h)
+		if sw < sh {
+			scale = sw
+		} else {
+			scale = sh
+		}
+	}
+	dw, dh := int(float64(w)*scale), int(float64(h)*scale)
+	if dw < 1 {
+		dw = 1
+	}
+	if dh < 1 {
+		dh = 1
+	}
+	outImg := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	for y := 0; y < dh; y++ {
+		for x := 0; x < dw; x++ {
+			sx := b.Min.X + x*w/dw
+			sy := b.Min.Y + y*h/dh
+			outImg.Set(x, y, srcImg.At(sx, sy))
+		}
+	}
+	tmp := dst + ".tmp"
+	out, err := os.Create(tmp)
+	if err != nil {
+		return "", err
+	}
+	encErr := jpeg.Encode(out, outImg, &jpeg.Options{Quality: 82})
+	closeErr := out.Close()
+	if encErr != nil {
+		return "", encErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	if err = os.Rename(tmp, dst); err != nil {
+		return "", err
+	}
+	return dst, nil
 }
 
 func initItemTimeTracker() *ItemTimeTracker {
@@ -839,15 +1025,92 @@ func main() {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
 
-	http.HandleFunc("/download-url", func(w http.ResponseWriter,r *http.Request){
-		if r.Method!="POST"{http.Error(w,"Method not allowed",405);return}; var parseErr error;if strings.HasPrefix(r.Header.Get("Content-Type"),"multipart/form-data"){parseErr=r.ParseMultipartForm(1<<20)}else{parseErr=r.ParseForm()};if parseErr!=nil{http.Error(w,parseErr.Error(),400);return}
-		u,err:=publicDownloadURL(strings.TrimSpace(r.FormValue("url")));if err!=nil{http.Error(w,err.Error(),400);return}
-		client:=&http.Client{Timeout:30*time.Minute,CheckRedirect:func(req *http.Request,via []*http.Request)error{if len(via)>=10{return fmt.Errorf("too many redirects")};_,err:=publicDownloadURL(req.URL.String());return err}}
-		resp,err:=client.Get(u.String());if err!=nil{http.Error(w,"Download failed: "+err.Error(),502);return};defer resp.Body.Close();if resp.StatusCode<200||resp.StatusCode>=300{http.Error(w,"Remote server returned "+resp.Status,502);return}
-		const maxSize int64=2<<30;if resp.ContentLength>maxSize{http.Error(w,"Remote file exceeds 2 GB",413);return};name:=downloadFilename(resp,u,r.FormValue("name"));unique:=generateUniqueFilename("data/files",name)
-		tmp,err:=os.CreateTemp("data/files",".url-download-*.tmp");if err!=nil{http.Error(w,err.Error(),500);return};tmpName:=tmp.Name();ok:=false;defer func(){tmp.Close();if !ok{os.Remove(tmpName)}}();n,err:=io.Copy(tmp,io.LimitReader(resp.Body,maxSize+1));if err!=nil||n>maxSize{http.Error(w,"Download failed or exceeds 2 GB",502);return};if err=tmp.Close();err!=nil{http.Error(w,err.Error(),500);return};dst:=filepath.Join("data/files",unique);if err=os.Rename(tmpName,dst);err!=nil{http.Error(w,err.Error(),500);return};ok=true
-		id:=filepath.Join("files",unique);itemTimeTracker.Create(id);expiry:=r.FormValue("expiry");if expiry!=""&&expiry!="Never"{expirationTracker.SetExpiration(id,expiry)};notifyContentChange();if r.Header.Get("X-Requested-With")=="XMLHttpRequest"{w.Write([]byte("Success"));return};http.Redirect(w,r,"/",303)
+	http.HandleFunc("/download-url", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", 405)
+			return
+		}
+		var parseErr error
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+			parseErr = r.ParseMultipartForm(1 << 20)
+		} else {
+			parseErr = r.ParseForm()
+		}
+		if parseErr != nil {
+			http.Error(w, parseErr.Error(), 400)
+			return
+		}
+		u, err := publicDownloadURL(strings.TrimSpace(r.FormValue("url")))
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		client := &http.Client{Timeout: 30 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			_, err := publicDownloadURL(req.URL.String())
+			return err
+		}}
+		resp, err := client.Get(u.String())
+		if err != nil {
+			http.Error(w, "Download failed: "+err.Error(), 502)
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			http.Error(w, "Remote server returned "+resp.Status, 502)
+			return
+		}
+		if resp.ContentLength > maxFileSize {
+			http.Error(w, "Remote file exceeds 4 GB", 413)
+			return
+		}
+		name := downloadFilename(resp, u, r.FormValue("name"))
+		unique := generateUniqueFilename("data/files", name)
+		tmp, err := os.CreateTemp("data/files", ".url-download-*.tmp")
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		tmpName := tmp.Name()
+		ok := false
+		defer func() {
+			tmp.Close()
+			if !ok {
+				os.Remove(tmpName)
+			}
+		}()
+		n, err := io.Copy(tmp, io.LimitReader(resp.Body, maxFileSize+1))
+		if err != nil || n > maxFileSize {
+			http.Error(w, "Download failed or exceeds 4 GB", 502)
+			return
+		}
+		if err = tmp.Close(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		dst := filepath.Join("data/files", unique)
+		if err = os.Rename(tmpName, dst); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		ok = true
+		id := filepath.Join("files", unique)
+		itemTimeTracker.Create(id)
+		expiry := r.FormValue("expiry")
+		if expiry != "" && expiry != "Never" {
+			expirationTracker.SetExpiration(id, expiry)
+		}
+		notifyContentChange()
+		if r.Header.Get("X-Requested-With") == "XMLHttpRequest" {
+			w.Write([]byte("Success"))
+			return
+		}
+		http.Redirect(w, r, "/", 303)
 	})
+
+	http.HandleFunc("/upload-stream", streamUploadHandler)
 
 	http.HandleFunc("/rename/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -922,7 +1185,10 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if strings.HasPrefix(oldPath, "files/") { _ = os.Remove(thumbnailPath(oldPath)); _ = os.Remove(thumbnailPath(strings.TrimPrefix(newPath, "data/"))) }
+		if strings.HasPrefix(oldPath, "files/") {
+			_ = os.Remove(thumbnailPath(oldPath))
+			_ = os.Remove(thumbnailPath(strings.TrimPrefix(newPath, "data/")))
+		}
 		newID := strings.TrimPrefix(newPath, "data/")
 		newID = strings.ReplaceAll(newID, "\\", "/")
 		itemTimeTracker.Rename(oldPath, newID)
@@ -1011,9 +1277,18 @@ func main() {
 
 	http.HandleFunc("/thumbnail/", func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/thumbnail/")
-		if !strings.HasPrefix(id, "files/") { http.Error(w, "Only images can be thumbnailed", http.StatusBadRequest); return }
-		path, err := ensureThumbnail(id); if err != nil { http.Error(w, "Thumbnail unavailable", http.StatusNotFound); return }
-		w.Header().Set("Content-Type", "image/jpeg"); w.Header().Set("Cache-Control", "public, max-age=31536000, immutable"); http.ServeFile(w, r, path)
+		if !strings.HasPrefix(id, "files/") {
+			http.Error(w, "Only images can be thumbnailed", http.StatusBadRequest)
+			return
+		}
+		path, err := ensureThumbnail(id)
+		if err != nil {
+			http.Error(w, "Thumbnail unavailable", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		http.ServeFile(w, r, path)
 	})
 
 	http.HandleFunc("/delete/", func(w http.ResponseWriter, r *http.Request) {
@@ -1068,7 +1343,9 @@ func main() {
 			http.Error(w, "Failed to delete file", http.StatusInternalServerError)
 			return
 		}
-		if strings.HasPrefix(id, "files/") { _ = os.Remove(thumbnailPath(id)) }
+		if strings.HasPrefix(id, "files/") {
+			_ = os.Remove(thumbnailPath(id))
+		}
 		itemTimeTracker.Delete(id)
 		expirationTracker.mu.Lock()
 		delete(expirationTracker.Expirations, id)
