@@ -1,4 +1,3 @@
-warning: /bin/bash: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 package main
 
 import (
