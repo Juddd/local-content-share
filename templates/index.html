@@ -1037,12 +1037,47 @@
 
         // SSE for live updates
         let evtSource;
+        let lastEventSequence = null;
+        function eventCard(id) {
+            if (!id) return null;
+            const escaped = CSS.escape(id);
+            return document.querySelector(`[data-file-id="${escaped}"], [data-snippet-id="${escaped}"], [data-link-id="${escaped}"]`);
+        }
         function connectSSE() {
             if (evtSource) {
                 evtSource.close();
             }
             evtSource = new EventSource("/api/updates");
             evtSource.onmessage = function(event) {
+                if (event.data.startsWith('{')) {
+                    try {
+                        const change = JSON.parse(event.data);
+                        if (change.type === 'connected') {
+                            lastEventSequence = change.sequence;
+                            refreshContentSections().catch(()=>{});
+                            return;
+                        }
+                        if (lastEventSequence === null || change.sequence !== lastEventSequence + 1) {
+                            lastEventSequence = change.sequence;
+                            refreshContentSections().catch(()=>{});
+                            return;
+                        }
+                        lastEventSequence = change.sequence;
+                        if (change.type === 'deleted' && change.id) {
+                            const card = eventCard(change.id);
+                            if (card) animateCardOut(card);
+                            else refreshContentSections().catch(()=>{});
+                            return;
+                        }
+                        if ((change.type === 'created' || change.type === 'updated' || change.type === 'renamed') && change.item) {
+                            const old = eventCard(change.oldId || change.id);
+                            if (old) old.remove();
+                            insertRenderedCard(change.item).catch(()=>refreshContentSections().catch(()=>{}));
+                            return;
+                        }
+                        if (change.type === 'reconcile') { refreshContentSections().catch(()=>{}); return; }
+                    } catch (_) {}
+                }
                 if (event.data === "content_updated") {
                     if (localMutationInFlight > 0) return;
                     const isModalOpen = document.querySelector('#new-item-modal:not(.hidden), #new-link-modal:not(.hidden), #rename-modal:not(.hidden), #view-snippet-modal:not(.hidden)');

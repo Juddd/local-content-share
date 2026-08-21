@@ -39,7 +39,16 @@ var content embed.FS
 var (
 	clients   = make(map[chan string]bool)
 	clientMux sync.Mutex
+	eventSequence uint64
 )
+
+type ContentEvent struct {
+	Sequence uint64 `json:"sequence"`
+	Type string `json:"type"`
+	ID string `json:"id,omitempty"`
+	OldID string `json:"oldId,omitempty"`
+	Item *Entry `json:"item,omitempty"`
+}
 
 type Entry struct {
 	ID         string    `json:"id"`
@@ -335,7 +344,7 @@ func streamUploadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
-	notifyContentChange()
+	for i := range entries { entry := entries[i]; notifyContentItem("created", &entry) }
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]any{"status": "created", "items": entries})
@@ -602,7 +611,7 @@ func (t *ExpirationTracker) CleanupExpired() []string {
 	}
 	if len(expiredFiles) > 0 {
 		t.saveToFile()
-		notifyContentChange()
+		for _, id := range expiredFiles { notifyContentDelete(id) }
 	}
 	return expiredFiles
 }
@@ -667,8 +676,10 @@ func handleContentUpdates(w http.ResponseWriter, r *http.Request) {
 	}()
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
-	// Send an initial message
-	fmt.Fprintf(w, "data: %s\n\n", "connected")
+	clientMux.Lock()
+	connected, _ := json.Marshal(ContentEvent{Sequence: eventSequence, Type: "connected"})
+	clientMux.Unlock()
+	fmt.Fprintf(w, "data: %s\n\n", connected)
 	w.(http.Flusher).Flush()
 	for {
 		select {
@@ -685,11 +696,40 @@ func handleContentUpdates(w http.ResponseWriter, r *http.Request) {
 }
 
 func notifyContentChange() {
+	notifyStructuredEvent(ContentEvent{Type: "reconcile"})
+}
+
+func notifyContentDelete(id string) {
+	notifyStructuredEvent(ContentEvent{Type: "deleted", ID: id})
+}
+
+func notifyContentItem(eventType string, item *Entry) {
+	if item == nil { notifyContentChange(); return }
+	notifyStructuredEvent(ContentEvent{Type: eventType, ID: item.ID, Item: item})
+}
+
+func notifyContentRename(oldID string, item *Entry) {
+	if item == nil { notifyContentChange(); return }
+	notifyStructuredEvent(ContentEvent{Type: "renamed", ID: item.ID, OldID: oldID, Item: item})
+}
+
+func notifyStructuredEvent(event ContentEvent) {
+	clientMux.Lock()
+	eventSequence++
+	event.Sequence = eventSequence
+	payload, err := json.Marshal(event)
+	if err == nil {
+		for client := range clients { select { case client <- string(payload): default: } }
+	}
+	clientMux.Unlock()
+}
+
+func notifyContentEvent(message string) {
 	clientMux.Lock()
 	defer clientMux.Unlock()
 	for client := range clients {
 		select {
-		case client <- "content_updated":
+		case client <- message:
 		default:
 		}
 	}
@@ -702,6 +742,17 @@ func fileEntry(id string) (*Entry, error) {
 	}
 	times := itemTimeTracker.Get(id, info.ModTime())
 	return &Entry{ID: id, Type: "file", Filename: filepath.Base(id), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size()}, nil
+}
+
+func contentEntry(id string) (*Entry, error) {
+	if strings.HasPrefix(id, "files/") { return fileEntry(id) }
+	if strings.HasPrefix(id, "text/") {
+		path := filepath.Join("data", filepath.FromSlash(id)); info, err := os.Stat(path); if err != nil { return nil, err }
+		body, err := os.ReadFile(path); if err != nil { return nil, err }
+		times := itemTimeTracker.Get(id, info.ModTime())
+		return &Entry{ID:id, Type:"text", Filename:filepath.Base(id), Content:string(body), CreatedAt:times.CreatedAt, ModifiedAt:times.ModifiedAt, Size:info.Size()}, nil
+	}
+	return nil, fmt.Errorf("unsupported content id")
 }
 
 func startURLDownloadTask(rawURL, requestedName, expiry string) (DownloadTask, error) {
@@ -856,7 +907,7 @@ func runURLDownloadTaskWithClient(ctx context.Context, id string, u *url.URL, re
 		task.cancel = nil
 	})
 	scheduleDownloadTaskCleanup(id)
-	notifyContentChange()
+	notifyContentItem("created", entry)
 }
 
 func main() {
@@ -1239,6 +1290,7 @@ func main() {
 		name := r.FormValue("name")
 		createdName := ""
 		var createdItem *Entry
+		var createdItems []*Entry
 		if entryType == "link" {
 			// Handle link submission
 			if content == "" {
@@ -1268,7 +1320,7 @@ func main() {
 			}
 			itemTimeTracker.Create("link/" + storedLink)
 			now := time.Now()
-			createdItem = &Entry{ID: "link/" + url.PathEscape(storedLink), Type: "link", Content: content, Filename: name, CreatedAt: now, ModifiedAt: now}
+			createdItem = &Entry{ID: "link/" + storedLink, Type: "link", Content: content, Filename: name, CreatedAt: now, ModifiedAt: now}
 			if createdItem.Filename == "" {
 				createdItem.Filename = content
 			}
@@ -1302,6 +1354,7 @@ func main() {
 							return err
 						}
 						itemTimeTracker.Create(filepath.Join("files", uniqueFileName))
+						if entry, entryErr := fileEntry(filepath.Join("files", uniqueFileName)); entryErr == nil { createdItems = append(createdItems, entry) }
 						if expiryOption != "Never" {
 							fileID := filepath.Join("files", uniqueFileName)
 							expirationTracker.SetExpiration(fileID, expiryOption)
@@ -1340,7 +1393,9 @@ func main() {
 				log.Printf("Saved text snippet %s with expiry %s\n", uniqueFileName, expiryOption)
 			}
 		}
-		notifyContentChange()
+		if createdItem != nil { notifyContentItem("created", createdItem) }
+		for _, item := range createdItems { notifyContentItem("created", item) }
+		if createdItem == nil && len(createdItems) == 0 { notifyContentChange() }
 		if strings.Contains(r.Header.Get("Accept"), "application/json") {
 			writeJSON(w, http.StatusCreated, map[string]any{"title": createdName, "item": createdItem})
 			return
@@ -1483,7 +1538,7 @@ func main() {
 		if expiry != "" && expiry != "Never" {
 			expirationTracker.SetExpiration(id, expiry)
 		}
-		notifyContentChange()
+		if entry, entryErr := fileEntry(id); entryErr == nil { notifyContentItem("created", entry) } else { notifyContentChange() }
 		if r.Header.Get("X-Requested-With") == "XMLHttpRequest" {
 			w.Write([]byte("Success"))
 			return
@@ -1537,7 +1592,9 @@ func main() {
 				return
 			}
 			itemTimeTracker.Rename("link/"+storedLink, "link/"+newName+"\t"+linkURL)
-			notifyContentChange()
+			newID := "link/"+newName+"\t"+linkURL
+			times := itemTimeTracker.Get(newID, time.Now())
+			notifyContentRename("link/"+storedLink, &Entry{ID:newID, Type:"link", Filename:newName, Content:linkURL, CreatedAt:times.CreatedAt, ModifiedAt:times.ModifiedAt})
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			log.Printf("Renamed link title to %s\n", newName)
 			return
@@ -1572,7 +1629,7 @@ func main() {
 		}
 		expirationTracker.mu.Unlock()
 		itemTimeTracker.Rename(oldPath, newID)
-		notifyContentChange()
+		if entry, entryErr := contentEntry(newID); entryErr == nil { notifyContentRename(oldPath, entry) } else { notifyContentChange() }
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		log.Printf("Renamed %s to %s\n", oldPath, newName)
 	})
@@ -1714,7 +1771,7 @@ func main() {
 				return
 			}
 			itemTimeTracker.Delete("link/" + linkToDelete)
-			notifyContentChange()
+			notifyContentDelete("link/" + linkToDelete)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"status": "ok"}`))
@@ -1741,7 +1798,7 @@ func main() {
 		delete(expirationTracker.Expirations, id)
 		expirationTracker.saveToFile()
 		expirationTracker.mu.Unlock()
-		notifyContentChange()
+		notifyContentDelete(id)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status": "ok"}`))
@@ -1774,7 +1831,7 @@ func main() {
 			itemTimeTracker.Get(id, info.ModTime())
 		}
 		itemTimeTracker.Touch(id)
-		notifyContentChange()
+		if entry, entryErr := contentEntry(id); entryErr == nil { notifyContentItem("updated", entry) } else { notifyContentChange() }
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		log.Printf("Edited %s\n", id)
 	})
