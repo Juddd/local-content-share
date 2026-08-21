@@ -8,6 +8,10 @@ on:
     tags:
       - v40.1
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   packages: write
