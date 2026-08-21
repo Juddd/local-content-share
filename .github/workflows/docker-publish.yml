@@ -15,8 +15,6 @@ permissions:
 env:
   IMAGE_NAME: ghcr.io/juddd/local-content-share
   RELEASE_TAG: v39.9
-  ANDROID_APK: content-transfer-v1.0.40.apk
-  ANDROID_APK_SHA256: b4bc003d7b83d2dd0817de2632bf8c130c69f209e412ae4f63e71ad7ca5947f8
 
 jobs:
   test:
@@ -30,25 +28,39 @@ jobs:
       - name: Run unit tests
         run: go test ./...
 
+  create-release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create personal release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists"
+          else
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Local Content Share 个人增强版 $RELEASE_TAG" \
+              --notes-file .github/release-notes-v39.9.md
+          fi
+
   publish-image:
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build and publish multi-architecture image
         uses: docker/build-push-action@v6
         with:
@@ -62,24 +74,3 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ env.RELEASE_TAG }}
-
-      - name: Download and verify Android APK
-        run: |
-          curl --fail --location --retry 3 \
-            --output "$ANDROID_APK" \
-            "http://nas.yode.ink:8084/download/files/$ANDROID_APK"
-          echo "$ANDROID_APK_SHA256  $ANDROID_APK" | sha256sum --check -
-
-      - name: Create or update personal release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$ANDROID_APK" --clobber
-          else
-            gh release create "$RELEASE_TAG" \
-              --target "$GITHUB_SHA" \
-              --title "Local Content Share 个人增强版 $RELEASE_TAG" \
-              --notes-file .github/release-notes-v39.9.md \
-              "$ANDROID_APK"
-          fi
