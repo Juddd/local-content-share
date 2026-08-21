@@ -304,7 +304,7 @@
     <!-- New Item Modal -->
     <div id="new-item-modal" class="hidden fixed inset-0 bg-overlay2/70 dark:bg-black/70 flex items-center justify-center max-w-full p-4 z-50">
         <div id="modal-backdrop" class="absolute inset-0"></div>
-        <div class="bg-crust rounded-3xl p-4 w-full max-w-lg z-10">
+        <div class="bg-crust rounded-3xl p-4 sm:p-6 w-full max-w-3xl max-h-[88vh] overflow-y-auto z-10">
             <form id="new-item-form" action="/submit" method="POST" enctype="multipart/form-data">
                 <input type="hidden" name="expiry" id="expiryValue" value="Never">
                 <div id="file-source-tabs" class="grid grid-cols-2 gap-2 mb-4 hidden"><button type="button" id="source-upload" class="py-2 rounded-xl bg-blue text-crust font-semibold">上传文件</button><button type="button" id="source-url" class="py-2 rounded-xl bg-base text-subtext0">从 URL 下载</button></div>
@@ -323,7 +323,7 @@
                      <input type="text" name="name" placeholder="名称（可选）" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl">
                 </div>
                 <div>
-                    <textarea name="content" placeholder="正文（同时提供文件和正文时优先使用文件）" rows="4" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none resize-y rounded-2xl"></textarea>
+                    <textarea name="content" placeholder="正文（同时提供文件和正文时优先使用文件）" rows="12" class="w-full min-h-[14rem] sm:min-h-[22.5rem] bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none resize-y rounded-2xl"></textarea>
                 </div>
                 <div id="progress-container" class="w-full bg-surface0 rounded-full h-2.5 my-4 hidden">
                     <div id="progress-bar" class="bg-blue h-2.5 rounded-full" style="width: 0%"></div>
