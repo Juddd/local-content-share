@@ -42,6 +42,17 @@ func TestTemporaryDownloadMarker(t *testing.T) {
 	}
 }
 
+func TestContentFilePathRejectsTraversal(t *testing.T) {
+	for _, id := range []string{"", "../secret", "files/../secret", "files/a/b", "files\\secret", "/files/secret", "notepad/md.file"} {
+		if _, err := contentFilePath(id, "files", "text"); err == nil {
+			t.Fatalf("expected invalid content ID to be rejected: %q", id)
+		}
+	}
+	if got, err := contentFilePath("files/image.png", "files", "text"); err != nil || got != filepath.Join("data", "files", "image.png") {
+		t.Fatalf("valid content ID rejected: %q (%v)", got, err)
+	}
+}
+
 func TestStreamUploadLimitIsFourGiB(t *testing.T) {
 	if maxFileSize != 4294967296 {
 		t.Fatalf("unexpected limit: %d", maxFileSize)
@@ -106,6 +117,47 @@ func TestStreamUploadHandlerSavesMultipartFile(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("temporary uploads remain: %v", matches)
+	}
+}
+
+func TestStreamUploadAddsExtensionFromFileContent(t *testing.T) {
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	if err = os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+	if err = os.MkdirAll("data/files", 0755); err != nil {
+		t.Fatal(err)
+	}
+	itemTimeTracker = initItemTimeTracker()
+	expirationTracker = initExpirationTracker()
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile("file-upload", "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pngHeader := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0, 'I', 'H', 'D', 'R'}
+	if _, err = part.Write(pngHeader); err != nil {
+		t.Fatal(err)
+	}
+	if err = mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/upload-stream", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	streamUploadHandler(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err = os.Stat("data/files/origin.png"); err != nil {
+		t.Fatalf("detected PNG filename missing: %v", err)
 	}
 }
 

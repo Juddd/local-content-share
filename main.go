@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -94,6 +95,27 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
+func contentFilePath(id string, allowedTypes ...string) (string, error) {
+	if id == "" || strings.Contains(id, "\\") || path.IsAbs(id) || path.Clean(id) != id {
+		return "", fmt.Errorf("invalid content ID")
+	}
+	parts := strings.Split(id, "/")
+	if len(parts) != 2 || parts[1] == "" || parts[1] == "." || parts[1] == ".." {
+		return "", fmt.Errorf("invalid content ID")
+	}
+	allowed := false
+	for _, contentType := range allowedTypes {
+		if parts[0] == contentType {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return "", fmt.Errorf("invalid content type")
+	}
+	return filepath.Join("data", parts[0], parts[1]), nil
+}
+
 type ItemTimes struct{ CreatedAt, ModifiedAt time.Time }
 type ItemTimeTracker struct {
 	Items map[string]ItemTimes `json:"items"`
@@ -105,6 +127,7 @@ var itemTimeTracker *ItemTimeTracker
 const thumbnailDir = "data/thumbnails"
 const maxFileSize int64 = 4 << 30
 const maxURLDownloadSize int64 = 8 << 30
+const maxTextContentSize int64 = 10 << 20
 
 func publicDownloadURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
@@ -123,6 +146,40 @@ func publicDownloadURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
+func publicOnlyTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		addresses, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		if err != nil {
+			return nil, err
+		}
+		for _, ip := range addresses {
+			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+				return nil, fmt.Errorf("private network URL is not allowed")
+			}
+		}
+		if len(addresses) == 0 {
+			return nil, fmt.Errorf("host has no IP address")
+		}
+		var lastErr error
+		for _, ip := range addresses {
+			connection, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if dialErr == nil {
+				return connection, nil
+			}
+			lastErr = dialErr
+		}
+		return nil, lastErr
+	}
+	return transport
+}
+
 func downloadFilename(resp *http.Response, u *url.URL, requested string) string {
 	if n := strings.TrimSpace(requested); n != "" {
 		return filepath.Base(n)
@@ -139,6 +196,32 @@ func downloadFilename(resp *http.Response, u *url.URL, requested string) string 
 		return n
 	}
 	return "download-" + time.Now().Format("20060102-150405")
+}
+
+func detectedFileExtension(filename string) string {
+	file, err := os.Open(filename)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	header := make([]byte, 512)
+	n, _ := io.ReadFull(file, header)
+	switch strings.SplitN(http.DetectContentType(header[:n]), ";", 2)[0] {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/bmp":
+		return ".bmp"
+	case "application/pdf":
+		return ".pdf"
+	default:
+		return ""
+	}
 }
 
 func saveStreamedFile(r *http.Request, expiry, requestedName string) ([]Entry, error) {
@@ -210,6 +293,10 @@ func saveStreamedFile(r *http.Request, expiry, requestedName string) ([]Entry, e
 		if e = tmp.Close(); e != nil {
 			return nil, e
 		}
+		if filepath.Ext(unique) == "" {
+			unique += detectedFileExtension(tmpName)
+			unique = generateUniqueFilename("data/files", unique)
+		}
 		if e = os.Rename(tmpName, filepath.Join("data/files", unique)); e != nil {
 			return nil, e
 		}
@@ -240,6 +327,7 @@ func streamUploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := saveStreamedFile(r, "", "")
 	if err != nil {
+		log.Printf("Stream upload failed from %s: %v", r.RemoteAddr, err)
 		status := http.StatusBadRequest
 		if strings.Contains(err.Error(), "exceeds 4 GB") {
 			status = http.StatusRequestEntityTooLarge
@@ -507,6 +595,10 @@ func (t *ExpirationTracker) CleanupExpired() []string {
 			log.Printf("Removed expired file: %s", fileID)
 		}
 		delete(t.Expirations, fileID)
+		if strings.HasPrefix(fileID, "files/") {
+			_ = os.Remove(thumbnailPath(fileID))
+		}
+		itemTimeTracker.Delete(fileID)
 	}
 	if len(expiredFiles) > 0 {
 		t.saveToFile()
@@ -640,6 +732,7 @@ func failURLDownloadTask(id string, err error) {
 		}
 		task.cancel = nil
 	})
+	scheduleDownloadTaskCleanup(id)
 }
 
 func downloadTaskCancelling(id string) bool {
@@ -647,8 +740,18 @@ func downloadTaskCancelling(id string) bool {
 	return ok && (task.Status == "cancelling" || task.Status == "cancelled")
 }
 
+func scheduleDownloadTaskCleanup(id string) {
+	time.AfterFunc(time.Hour, func() {
+		downloadTasks.Lock()
+		defer downloadTasks.Unlock()
+		if task := downloadTasks.tasks[id]; task != nil && (task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled") {
+			delete(downloadTasks.tasks, id)
+		}
+	})
+}
+
 func runURLDownloadTask(ctx context.Context, id string, u *url.URL, requestedName, expiry string) {
-	runURLDownloadTaskWithClient(ctx, id, u, requestedName, expiry, nil)
+	runURLDownloadTaskWithClient(ctx, id, u, requestedName, expiry, publicOnlyTransport())
 }
 
 func runURLDownloadTaskWithClient(ctx context.Context, id string, u *url.URL, requestedName, expiry string, transport http.RoundTripper) {
@@ -752,6 +855,7 @@ func runURLDownloadTaskWithClient(ctx context.Context, id string, u *url.URL, re
 		task.Item = entry
 		task.cancel = nil
 	})
+	scheduleDownloadTaskCleanup(id)
 	notifyContentChange()
 }
 
@@ -1089,9 +1193,13 @@ func main() {
 				http.Error(w, "Invalid notepad file", http.StatusBadRequest)
 				return
 			}
-			content, err := io.ReadAll(r.Body)
+			content, err := io.ReadAll(io.LimitReader(r.Body, maxTextContentSize+1))
 			if err != nil {
 				http.Error(w, "Error reading request body", http.StatusInternalServerError)
+				return
+			}
+			if int64(len(content)) > maxTextContentSize {
+				http.Error(w, "Notepad content exceeds 10 MB", http.StatusRequestEntityTooLarge)
 				return
 			}
 			err = os.WriteFile(filepath.Join("data", "notepad", filename), content, 0644)
@@ -1129,6 +1237,8 @@ func main() {
 		expiryOption := r.FormValue("expiry")
 		content := r.FormValue("content")
 		name := r.FormValue("name")
+		createdName := ""
+		var createdItem *Entry
 		if entryType == "link" {
 			// Handle link submission
 			if content == "" {
@@ -1157,6 +1267,11 @@ func main() {
 				return
 			}
 			itemTimeTracker.Create("link/" + storedLink)
+			now := time.Now()
+			createdItem = &Entry{ID: "link/" + url.PathEscape(storedLink), Type: "link", Content: content, Filename: name, CreatedAt: now, ModifiedAt: now}
+			if createdItem.Filename == "" {
+				createdItem.Filename = content
+			}
 			log.Printf("Saved link %s\n", content)
 		} else {
 			// Handle file and text submission
@@ -1203,7 +1318,10 @@ func main() {
 				// Text snippet submission
 				filename := name
 				if filename == "" {
-					filename = time.Now().Format("Jan-02 15-04-05")
+					// Use a full-width slash so the title reads as month/day while
+					// remaining a safe single filename on disk.
+					chinaStandardTime := time.FixedZone("China Standard Time", 8*60*60)
+					filename = time.Now().In(chinaStandardTime).Format("01／02 15-04-05")
 				}
 				uniqueFileName := generateUniqueFilename("data/text", filename)
 				err := os.WriteFile(filepath.Join("data/text", uniqueFileName), []byte(content), 0644)
@@ -1212,6 +1330,9 @@ func main() {
 					return
 				}
 				itemTimeTracker.Create(filepath.Join("text", uniqueFileName))
+				createdName = uniqueFileName
+				now := time.Now()
+				createdItem = &Entry{ID: filepath.Join("text", uniqueFileName), Type: "text", Content: content, Filename: uniqueFileName, CreatedAt: now, ModifiedAt: now}
 				if expiryOption != "Never" {
 					fileID := filepath.Join("text", uniqueFileName)
 					expirationTracker.SetExpiration(fileID, expiryOption)
@@ -1220,6 +1341,10 @@ func main() {
 			}
 		}
 		notifyContentChange()
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			writeJSON(w, http.StatusCreated, map[string]any{"title": createdName, "item": createdItem})
+			return
+		}
 		// Send succes for AJAX
 		if r.Header.Get("X-Requested-With") == "XMLHttpRequest" {
 			w.WriteHeader(http.StatusOK)
@@ -1301,7 +1426,7 @@ func main() {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		client := &http.Client{Timeout: 30 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		client := &http.Client{Timeout: 30 * time.Minute, Transport: publicOnlyTransport(), CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("too many redirects")
 			}
@@ -1417,26 +1542,18 @@ func main() {
 			log.Printf("Renamed link title to %s\n", newName)
 			return
 		}
-		baseDir := filepath.Dir(filepath.Join("data", oldPath))
+		oldFullPath, err := contentFilePath(oldPath, "files", "text")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		baseDir := filepath.Dir(oldFullPath)
 		newName = generateUniqueFilename(baseDir, newName)
 
 		// Get the new full path
 		newPath := filepath.Join(baseDir, newName)
-		oldFullPath := filepath.Join("data", oldPath)
-		// Check if there's an expiration for this file
-		expirationTracker.mu.Lock()
-		expiryTime, hasExpiry := expirationTracker.Expirations[oldPath]
-		if hasExpiry {
-			// Remove old entry and add new one
-			delete(expirationTracker.Expirations, oldPath)
-			relNewPath := strings.TrimPrefix(newPath, "data/")
-			relNewPath = strings.ReplaceAll(relNewPath, "\\", "/") // Ensure cross-platform path separators
-			expirationTracker.Expirations[relNewPath] = expiryTime
-			expirationTracker.saveToFile()
-		}
-		expirationTracker.mu.Unlock()
 		// Rename the file
-		err := os.Rename(oldFullPath, newPath)
+		err = os.Rename(oldFullPath, newPath)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1447,6 +1564,13 @@ func main() {
 		}
 		newID := strings.TrimPrefix(newPath, "data/")
 		newID = strings.ReplaceAll(newID, "\\", "/")
+		expirationTracker.mu.Lock()
+		if expiryTime, hasExpiry := expirationTracker.Expirations[oldPath]; hasExpiry {
+			delete(expirationTracker.Expirations, oldPath)
+			expirationTracker.Expirations[newID] = expiryTime
+			expirationTracker.saveToFile()
+		}
+		expirationTracker.mu.Unlock()
 		itemTimeTracker.Rename(oldPath, newID)
 		notifyContentChange()
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -1455,11 +1579,12 @@ func main() {
 
 	http.HandleFunc("/raw/", func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/raw/")
-		if !strings.HasPrefix(id, "text/") {
+		filePath, pathErr := contentFilePath(id, "text")
+		if pathErr != nil {
 			http.Error(w, "Only text files can be accessed", http.StatusBadRequest)
 			return
 		}
-		content, err := os.ReadFile(filepath.Join("data", id))
+		content, err := os.ReadFile(filePath)
 		if err != nil {
 			http.Error(w, "File not found", 404)
 			return
@@ -1471,7 +1596,11 @@ func main() {
 
 	http.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
 		filename := strings.TrimPrefix(r.URL.Path, "/download/")
-		filePath := filepath.Join("data", filename)
+		filePath, pathErr := contentFilePath(filename, "files", "text")
+		if pathErr != nil {
+			http.Error(w, "Invalid file", http.StatusBadRequest)
+			return
+		}
 		fileInfo, err := os.Stat(filePath)
 		if err != nil {
 			http.Error(w, "File not found", http.StatusNotFound)
@@ -1514,26 +1643,26 @@ func main() {
 		}
 		baseFilename := filepath.Base(filename)
 		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", baseFilename))
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": baseFilename}))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		_, err = io.Copy(w, file)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		http.ServeContent(w, r, baseFilename, fileInfo.ModTime(), file)
 		log.Printf("Served %s for download\n", filename)
 	})
 
 	http.HandleFunc("/view/", func(w http.ResponseWriter, r *http.Request) {
 		filename := strings.TrimPrefix(r.URL.Path, "/view/")
-		http.ServeFile(w, r, filepath.Join("data", filename))
+		filePath, err := contentFilePath(filename, "files")
+		if err != nil {
+			http.Error(w, "Invalid file", http.StatusBadRequest)
+			return
+		}
+		http.ServeFile(w, r, filePath)
 		log.Printf("Served %s for viewing\n", filename)
 	})
 
 	http.HandleFunc("/thumbnail/", func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/thumbnail/")
-		if !strings.HasPrefix(id, "files/") {
+		if _, err := contentFilePath(id, "files"); err != nil {
 			http.Error(w, "Only images can be thumbnailed", http.StatusBadRequest)
 			return
 		}
@@ -1593,7 +1722,12 @@ func main() {
 			return
 		}
 		// Handle file and snippet deletion
-		err := os.Remove(filepath.Join("data", id))
+		filePath, pathErr := contentFilePath(id, "files", "text")
+		if pathErr != nil {
+			http.Error(w, "Invalid item", http.StatusBadRequest)
+			return
+		}
+		err := os.Remove(filePath)
 		if err != nil {
 			log.Printf("Failed to delete %s: %v", id, err)
 			http.Error(w, "Failed to delete file", http.StatusInternalServerError)
@@ -1620,7 +1754,8 @@ func main() {
 			return
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/edit/")
-		if !strings.HasPrefix(id, "text/") {
+		filePath, pathErr := contentFilePath(id, "text")
+		if pathErr != nil {
 			http.Error(w, "Can only edit text snippets", http.StatusBadRequest)
 			return
 		}
@@ -1629,7 +1764,6 @@ func main() {
 			http.Error(w, "Content cannot be empty", http.StatusBadRequest)
 			return
 		}
-		filePath := filepath.Join("data", id)
 		info, statErr := os.Stat(filePath)
 		err := os.WriteFile(filePath, []byte(content), 0644)
 		if err != nil {

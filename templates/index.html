@@ -184,6 +184,23 @@
             width: 100%;
             margin-top: 0.5rem;
         }
+
+        @keyframes card-enter {
+            from { opacity: 0; transform: translateY(0.8rem) scale(0.97); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        @keyframes card-leave {
+            from { opacity: 0.45; transform: scale(1); }
+            to { opacity: 0; transform: translateY(-0.5rem) scale(0.94); }
+        }
+
+        .card-entering { animation: card-enter 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+        .card-removing { animation: card-leave 220ms ease-in both; pointer-events: none; }
+
+        @media (prefers-reduced-motion: reduce) {
+            .card-entering, .card-removing { animation-duration: 1ms; }
+        }
     </style>
 </head>
 <body class="bg-crust text-text antialiased transition-colors duration-300">
@@ -525,9 +542,7 @@
         newLinkButton.addEventListener('click', () => newLinkModal.classList.remove('hidden'));
         linkCancelButton.addEventListener('click', () => newLinkModal.classList.add('hidden'));
         linkModalBackdrop.addEventListener('click', () => newLinkModal.classList.add('hidden'));
-        document.getElementById('new-link-form').addEventListener('submit', () => {
-            newLinkModal.classList.add('hidden');
-        });
+        const newLinkForm = document.getElementById('new-link-form');
         
         // File upload and drag & drop handling
         const fileInput = document.getElementById('file-upload');
@@ -787,6 +802,23 @@
         }
         
         let localMutationInFlight = 0;
+        function animateCardIn(row) {
+            if (!row) return;
+            row.classList.add('card-entering');
+            row.addEventListener('animationend', () => row.classList.remove('card-entering'), {once:true});
+        }
+
+        function animateCardOut(row) {
+            if (!row) return Promise.resolve();
+            row.classList.add('card-removing');
+            return new Promise(resolve => {
+                let finished = false;
+                const done = () => { if(finished)return;finished=true;row.remove();resolve(); };
+                row.addEventListener('animationend', done, {once:true});
+                setTimeout(done, 350);
+            });
+        }
+
         function deleteItem(id, button) {
             const row = button && button.closest('[data-file-row], [data-snippet-row], [data-link-row]');
             if (row) { row.style.opacity = '0.45'; row.style.pointerEvents = 'none'; }
@@ -794,11 +826,11 @@
             fetch(`/delete/${id}`, { method: 'POST' })
             .then(async response => {
                 if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
-                if (row) row.remove();
+                if (row) await animateCardOut(row);
                 else await refreshContentSections();
             })
             .catch(error => {
-                if (row) { row.style.opacity = ''; row.style.pointerEvents = ''; }
+                if (row) { row.classList.remove('card-removing');row.style.opacity = ''; row.style.pointerEvents = ''; }
                 alert(`删除失败：${error.message}`);
             })
             .finally(() => { setTimeout(() => { localMutationInFlight = Math.max(0, localMutationInFlight - 1); }, 800); });
@@ -837,6 +869,51 @@
         const newItemForm = document.getElementById('new-item-form');
         async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const html=await response.text();const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});renderSnippetPreviews();}
 
+        async function insertRenderedCard(item) {
+            if (!item || !item.type) throw new Error('服务器未返回新卡片');
+            const response = await fetch('/', {cache:'no-store'});
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+            let source, target;
+            if (item.type === 'text') {
+                source = Array.from(doc.querySelectorAll('[data-snippet-row]')).find(row => row.dataset.snippetId === item.id);
+                target = document.getElementById('snippets-list');
+            } else if (item.type === 'link') {
+                source = Array.from(doc.querySelectorAll('[data-link-row]')).find(row => row.dataset.title === item.filename && row.querySelector('[data-link-url]')?.textContent.trim() === item.content);
+                target = document.getElementById('links-list');
+            }
+            if (!source || !target) throw new Error('无法定位服务端生成的卡片');
+            const duplicate = item.type === 'text' && Array.from(target.querySelectorAll('[data-snippet-row]')).some(row => row.dataset.snippetId === item.id);
+            if (!duplicate) {
+                const card = document.importNode(source, true);
+                target.prepend(card);
+                animateCardIn(card);
+            }
+            renderSnippetPreviews();
+        }
+
+        async function submitNewCard(form, onSuccess) {
+            localMutationInFlight++;
+            try {
+                const response = await fetch('/submit', {method:'POST', headers:{'Accept':'application/json'}, body:new FormData(form)});
+                if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+                const result = await response.json();
+                await insertRenderedCard(result.item);
+                onSuccess();
+            } finally {
+                setTimeout(() => { localMutationInFlight = Math.max(0, localMutationInFlight - 1); }, 800);
+            }
+        }
+
+        newLinkForm.addEventListener('submit', function(event) {
+            event.preventDefault();
+            const submit = this.querySelector('[type="submit"]');
+            submit.disabled = true;
+            submitNewCard(this, () => { newLinkModal.classList.add('hidden'); this.reset(); })
+                .catch(error => alert(`新增链接失败：${error.message}`))
+                .finally(() => { submit.disabled = false; });
+        });
+
         function insertFileCard(item) {
             if (!item || !item.id || document.querySelector(`[data-file-id="${CSS.escape(item.id)}"]`)) return;
             const row = document.createElement('div');
@@ -862,6 +939,7 @@
             actions.append(button('fa-trash','删除',b=>deleteItem(item.id,b)));
             row.append(info, actions);
             document.getElementById('files-list').prepend(row);
+            animateCardIn(row);
         }
 
         async function monitorURLDownload(taskId) {
@@ -884,9 +962,13 @@
             const files = fileInput.files;
             const isFileUpload = files.length > 0;
             const isTextSubmission = this.elements.content.value.trim() !== '';
-            // Use old form if not file
+            // Text submissions use AJAX and insert only the newly rendered card.
             if (!isFileUpload && isTextSubmission) {
-                this.submit();
+                const submit = this.querySelector('[type="submit"]');
+                submit.disabled = true;
+                submitNewCard(this, closeAndResetNewItemModal)
+                    .catch(error => alert(`新增 Snippet 失败：${error.message}`))
+                    .finally(() => { submit.disabled = false; });
                 return;
             }
             const formData = new FormData(this);
@@ -934,15 +1016,23 @@
             if (!link) return;
             event.preventDefault();
             const controller = new AbortController();
+            const requestedName=decodeURIComponent(link.href.split('/').pop());
+            const fileHandlePromise=window.showSaveFilePicker?window.showSaveFilePicker({suggestedName:requestedName}):null;
             activeTransfer = {controller};
             newItemModal.classList.remove('hidden'); sourceTabs.classList.add('hidden');
             showTransferProgress('正在下载到浏览器');
             fetch(link.href,{signal:controller.signal}).then(async response=>{
                 if(!response.ok)throw new Error(`HTTP ${response.status}`);
-                const total=Number(response.headers.get('Content-Length'))||0,reader=response.body.getReader(),chunks=[];let received=0;
-                while(true){const {done,value}=await reader.read();if(done)break;chunks.push(value);received+=value.length;showTransferProgress('正在下载到浏览器',received,total);}
-                const blob=new Blob(chunks),url=URL.createObjectURL(blob),save=document.createElement('a');save.href=url;save.download=decodeURIComponent(link.href.split('/').pop());save.click();setTimeout(()=>URL.revokeObjectURL(url),1000);activeTransfer=null;closeAndResetNewItemModal();
-            }).catch(error=>{activeTransfer=null;if(error.name!=='AbortError')progressStatus.textContent=`下载失败：${error.message}`;});
+                const total=Number(response.headers.get('Content-Length'))||0,fileName=requestedName,memoryLimit=256*1024*1024;
+                if(!window.showSaveFilePicker && (!total || total>memoryLimit)){controller.abort();activeTransfer=null;closeAndResetNewItemModal();window.location.assign(link.href);return;}
+                const reader=response.body.getReader(),chunks=[];let received=0,writable=null;
+                if(fileHandlePromise){const handle=await fileHandlePromise;writable=await handle.createWritable();}
+                try{
+                    while(true){const {done,value}=await reader.read();if(done)break;received+=value.length;if(!writable&&received>memoryLimit){controller.abort();activeTransfer=null;closeAndResetNewItemModal();window.location.assign(link.href);return;}if(writable)await writable.write(value);else chunks.push(value);showTransferProgress('正在下载到浏览器',received,total);}
+                    if(writable)await writable.close();else{const blob=new Blob(chunks),url=URL.createObjectURL(blob),save=document.createElement('a');save.href=url;save.download=fileName;save.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+                    activeTransfer=null;closeAndResetNewItemModal();
+                }catch(error){if(writable)await writable.abort().catch(()=>{});throw error;}
+            }).catch(error=>{controller.abort();activeTransfer=null;if(error.name!=='AbortError')progressStatus.textContent=`下载失败：${error.message}`;});
         });
 
         // SSE for live updates
