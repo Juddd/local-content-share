@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 {{define "section-sort"}}
 <div class="relative section-sort" data-list="{{.}}">
     <button type="button" class="section-sort-button flex items-center gap-2 px-3 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors" title="排序"><i class="fas fa-arrow-down-wide-short text-subtext0"></i><span class="section-sort-text font-medium text-sm text-subtext0">创建时间 ↓</span></button>
@@ -279,7 +280,7 @@
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Links</h2>{{template "section-sort" "links-list"}}</div>
                 <div id="links-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "link"}}
-                    <div data-link-row data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
+                    <div data-link-row data-link-id="{{.ID}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
                         <div class="min-w-0 flex-1">
                                 <div class="link-card-name font-semibold text-text mb-1" title="{{.Filename}}">{{.Filename}}</div>
                                 <div data-link-url class="text-subtext0 break-all">{{.Content}}</div>
@@ -867,7 +868,7 @@
 
         // New form submission with progress
         const newItemForm = document.getElementById('new-item-form');
-        async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const html=await response.text();const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});renderSnippetPreviews();}
+        async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const snapshot=Number(response.headers.get('X-Content-Sequence'));const html=await response.text();if(Number.isFinite(snapshot)&&lastEventSequence!==null&&lastEventSequence>snapshot){setTimeout(()=>refreshContentSections().catch(()=>{}),150);return;}const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});if(Number.isFinite(snapshot))lastEventSequence=Math.max(lastEventSequence??-1,snapshot);renderSnippetPreviews();}
 
         async function insertRenderedCard(item) {
             if (!item || !item.type) throw new Error('服务器未返回新卡片');
@@ -879,11 +880,11 @@
                 source = Array.from(doc.querySelectorAll('[data-snippet-row]')).find(row => row.dataset.snippetId === item.id);
                 target = document.getElementById('snippets-list');
             } else if (item.type === 'link') {
-                source = Array.from(doc.querySelectorAll('[data-link-row]')).find(row => row.dataset.title === item.filename && row.querySelector('[data-link-url]')?.textContent.trim() === item.content);
+                source = Array.from(doc.querySelectorAll('[data-link-row]')).find(row => row.dataset.linkId === item.id);
                 target = document.getElementById('links-list');
             }
             if (!source || !target) throw new Error('无法定位服务端生成的卡片');
-            const duplicate = item.type === 'text' && Array.from(target.querySelectorAll('[data-snippet-row]')).some(row => row.dataset.snippetId === item.id);
+            const duplicate = Array.from(target.querySelectorAll(item.type === 'text' ? '[data-snippet-row]' : '[data-link-row]')).some(row => (item.type === 'text' ? row.dataset.snippetId : row.dataset.linkId) === item.id);
             if (!duplicate) {
                 const card = document.importNode(source, true);
                 target.prepend(card);
@@ -1047,14 +1048,13 @@
             if (evtSource) {
                 evtSource.close();
             }
-            evtSource = new EventSource("/api/updates");
+            evtSource = new EventSource("/api/updates" + (lastEventSequence === null ? "" : `?since=${lastEventSequence}`));
             evtSource.onmessage = function(event) {
                 if (event.data.startsWith('{')) {
                     try {
                         const change = JSON.parse(event.data);
                         if (change.type === 'connected') {
-                            lastEventSequence = change.sequence;
-                            refreshContentSections().catch(()=>{});
+                            if (lastEventSequence === null) { lastEventSequence = change.sequence; refreshContentSections().catch(()=>{}); }
                             return;
                         }
                         if (lastEventSequence === null || change.sequence !== lastEventSequence + 1) {

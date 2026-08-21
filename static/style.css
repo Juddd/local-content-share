@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 :root {
     /* Color palette */
     --purple-primary: #7C3AED;
@@ -103,6 +104,14 @@ body {
     background: var(--bg);
     color: var(--text-primary);
     min-height: 100vh;
+}
+
+/* Keep compact icons while meeting a comfortable touch target on both layouts. */
+[data-file-row] button, [data-file-row] a,
+[data-snippet-row] button, [data-snippet-row] a,
+[data-link-row] button, [data-link-row] a {
+    min-width: 44px;
+    min-height: 44px;
 }
 
 .container {
