@@ -6,7 +6,7 @@ on:
     branches:
       - main
     tags:
-      - v39.8
+      - v39.9
 
 permissions:
   contents: write
@@ -14,7 +14,9 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/juddd/local-content-share
-  RELEASE_TAG: v39.8
+  RELEASE_TAG: v39.9
+  ANDROID_APK: content-transfer-v1.0.40.apk
+  ANDROID_APK_SHA256: b4bc003d7b83d2dd0817de2632bf8c130c69f209e412ae4f63e71ad7ca5947f8
 
 jobs:
   test:
@@ -61,15 +63,23 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ env.RELEASE_TAG }}
 
-      - name: Create personal release
+      - name: Download and verify Android APK
+        run: |
+          curl --fail --location --retry 3 \
+            --output "$ANDROID_APK" \
+            "http://nas.yode.ink:8084/download/files/$ANDROID_APK"
+          echo "$ANDROID_APK_SHA256  $ANDROID_APK" | sha256sum --check -
+
+      - name: Create or update personal release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists"
+            gh release upload "$RELEASE_TAG" "$ANDROID_APK" --clobber
           else
             gh release create "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
               --title "Local Content Share 个人增强版 $RELEASE_TAG" \
-              --notes-file .github/release-notes-v39.8.md
+              --notes-file .github/release-notes-v39.9.md \
+              "$ANDROID_APK"
           fi
