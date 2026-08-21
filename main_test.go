@@ -71,12 +71,26 @@ func TestCustomDurationDistinguishesMonthsFromMinutes(t *testing.T) {
 
 func TestAtomicWriteFileReplacesCompleteContents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.json")
-	if err := atomicWriteFile(path, []byte(`{"version":1}`), 0644); err != nil { t.Fatal(err) }
-	if err := atomicWriteFile(path, []byte(`{"version":2,"complete":true}`), 0644); err != nil { t.Fatal(err) }
-	data, err := os.ReadFile(path); if err != nil { t.Fatal(err) }
-	if string(data) != `{"version":2,"complete":true}` { t.Fatalf("unexpected contents: %s", data) }
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".metadata-*.tmp")); if err != nil { t.Fatal(err) }
-	if len(matches) != 0 { t.Fatalf("temporary metadata files remained: %v", matches) }
+	if err := atomicWriteFile(path, []byte(`{"version":1}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteFile(path, []byte(`{"version":2,"complete":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"version":2,"complete":true}` {
+		t.Fatalf("unexpected contents: %s", data)
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".metadata-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary metadata files remained: %v", matches)
+	}
 }
 
 func TestStreamUploadHandlerSavesMultipartFile(t *testing.T) {
