@@ -4,6 +4,11 @@ WORKDIR /app
 
 COPY . .
 
+# GitHub's text-only repository API stores the generated web icons as Base64.
+# Restore the exact PNG assets before Go embeds the static directory.
+RUN base64 -d assets/icon-192.png.base64 > static/icon-192.png \
+    && base64 -d assets/icon-512.png.base64 > static/icon-512.png
+
 # Resolve Go module checksums during the image build.
 RUN go mod download
 
