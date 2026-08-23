@@ -1,4 +1,3 @@
-warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 <div align="center">
   <img src="assets/logo.svg" alt="Local Content Share 标志" width="200">
   <h1>Local Content Share（个人增强版）</h1>

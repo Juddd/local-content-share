@@ -1,4 +1,3 @@
-warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 # 设备中心与远程锁定
 
 - 新增浏览器设备中心 API，展示在线、后台、离线、IP、页面数量与最后活动时间。
