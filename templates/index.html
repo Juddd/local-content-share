@@ -235,7 +235,7 @@
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">文字</h2>{{template "section-sort" "snippets-list"}}</div>
                 <div id="snippets-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "text"}}
-                    <div data-snippet-row data-snippet-id="{{.ID}}" data-favorite="{{if .Favorite}}1{{else}}0{{end}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
+                    <div data-snippet-row data-snippet-id="{{.ID}}" data-revision="{{.Revision}}" data-favorite="{{if .Favorite}}1{{else}}0{{end}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
                         <div class="flex items-start justify-between gap-2 mb-2">
                             <div class="font-semibold text-text break-all min-w-0">{{.Filename}}</div>
                             <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
@@ -258,7 +258,7 @@
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">文件</h2>{{template "section-sort" "files-list"}}</div>
                 <div id="files-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "file"}}
-                    <div data-file-row data-file-id="{{.ID}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="file-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
+                    <div data-file-row data-file-id="{{.ID}}" data-revision="{{.Revision}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="file-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
                         <div class="flex items-center gap-3 min-w-0">
                             <img class="file-card-thumb" src="/thumbnail/{{.ID}}" alt="" loading="lazy" onerror="this.style.display='none'">
                             <div class="file-card-info"><div class="file-card-name font-medium text-text mr-2" title="{{.Filename}}">{{.Filename}}</div></div>
@@ -280,7 +280,7 @@
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">链接</h2>{{template "section-sort" "links-list"}}</div>
                 <div id="links-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "link"}}
-                    <div data-link-row data-link-id="{{.ID}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
+                    <div data-link-row data-link-id="{{.ID}}" data-revision="{{.Revision}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
                         <div class="min-w-0 flex-1">
                                 <div class="link-card-name font-semibold text-text mb-1" title="{{.Filename}}">{{.Filename}}</div>
                                 <div data-link-url class="text-subtext0 break-all">{{.Content}}</div>
@@ -718,7 +718,7 @@
             e.preventDefault();
             if (!newNameInput.value) return;
             const id=renameForm.action.split('/rename/')[1]; const row=document.querySelector(`[data-file-row], [data-snippet-row], [data-link-row]`);
-            fetch(renameForm.action,{method:'POST',body:new URLSearchParams({newname:newNameInput.value})}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);document.querySelectorAll(`[data-file-row], [data-snippet-row], [data-link-row]`).forEach(x=>{if(x.dataset.title===oldNameDisplay.textContent){x.dataset.title=newNameInput.value;const n=x.querySelector('.file-card-name,.link-card-name,[data-snippet-title]');if(n)n.textContent=newNameInput.value;}});renameModal.classList.add('hidden');}).catch(e=>alert('重命名失败：'+e.message));
+            const target=eventCard(id);fetch(renameForm.action,{method:'POST',headers:{'Accept':'application/json'},body:new URLSearchParams({newname:newNameInput.value,expectedRevision:target?.dataset.revision||''})}).then(async r=>{if(!r.ok)throw new Error(await r.text()||'HTTP '+r.status);const result=await r.json();if(target)target.remove();await insertRenderedCard(result.item);renameModal.classList.add('hidden');}).catch(e=>alert('重命名失败：'+e.message));
         });
 
         // Edit form logic
@@ -842,7 +842,7 @@
             const row = button && button.closest('[data-file-row], [data-snippet-row], [data-link-row]');
             if (row) { row.style.opacity = '0.45'; row.style.pointerEvents = 'none'; }
             localMutationInFlight++;
-            fetch(`/delete/${id}`, { method: 'POST' })
+            fetch(`/delete/${id}`, { method: 'POST', body:new URLSearchParams({expectedRevision:row?.dataset.revision||''}) })
             .then(async response => {
                 if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
                 if (row) await animateCardOut(row);
@@ -859,7 +859,7 @@
             const row=button.closest('[data-snippet-row]'); button.disabled=true; localMutationInFlight++;
             try {
                 const desired=row.dataset.favorite!=='1';
-                const response=await fetch(`/favorite/${id}`,{method:'POST',headers:{'Accept':'application/json'},body:new URLSearchParams({favorite:String(desired)})});
+                const response=await fetch(`/favorite/${id}`,{method:'POST',headers:{'Accept':'application/json'},body:new URLSearchParams({favorite:String(desired),expectedRevision:row.dataset.revision||''})});
                 if(!response.ok)throw new Error(await response.text()||`HTTP ${response.status}`);
                 const result=await response.json(); row.remove(); await insertRenderedCard(result.item); applyListSort('snippets-list',true);
             } catch(error) { alert(`收藏操作失败：${error.message}`); }
@@ -902,14 +902,14 @@
         function actionButton(icon,title,handler){const button=document.createElement('button');button.className='w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors';button.title=title;button.innerHTML=`<i class="${icon}"></i>`;button.onclick=event=>{event.stopPropagation();handler(button);};return button;}
         function itemUnix(value){const parsed=Date.parse(value);return Number.isFinite(parsed)?Math.floor(parsed/1000):Math.floor(Date.now()/1000);}
         function createSnippetCard(item){
-            const row=document.createElement('div');row.dataset.snippetRow='';row.dataset.snippetId=item.id;row.dataset.favorite=item.favorite?'1':'0';row.dataset.created=itemUnix(item.createdAt);row.dataset.modified=itemUnix(item.modifiedAt);row.dataset.title=item.filename||'';row.className='bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative';
+            const row=document.createElement('div');row.dataset.snippetRow='';row.dataset.snippetId=item.id;row.dataset.revision=item.revision||0;row.dataset.favorite=item.favorite?'1':'0';row.dataset.created=itemUnix(item.createdAt);row.dataset.modified=itemUnix(item.modifiedAt);row.dataset.title=item.filename||'';row.className='bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative';
             const heading=document.createElement('div');heading.className='flex items-start justify-between gap-2 mb-2';const title=document.createElement('div');title.className='font-semibold text-text break-all min-w-0';title.textContent=item.filename||'';heading.appendChild(title);
             const actions=document.createElement('div');actions.className='flex items-center gap-0 sm:gap-1 flex-shrink-0';actions.append(actionButton('fas fa-i-cursor','重命名',()=>showRenameModal(item.id,item.filename)),actionButton('fas fa-pen','编辑',()=>showEditForm(item.id,item.filename)),actionButton('fas fa-copy','复制',button=>copyToClipboard(item.content||'',button)),actionButton('fas fa-trash','删除',button=>deleteItem(item.id,button)));heading.appendChild(actions);
             const content=document.createElement('div');content.dataset.snippetContent='';content.className='w-full whitespace-pre-wrap break-all text-subtext0';const full=document.createElement('div');full.dataset.snippetFull='';full.className='hidden';full.textContent=item.content||'';
             const favorite=document.createElement('button');favorite.className=`absolute right-3 bottom-2 w-8 h-8 flex items-center justify-center hover:bg-surface0 ${item.favorite?'text-yellow':'text-overlay1'} rounded-full transition-colors`;favorite.title=item.favorite?'取消收藏':'收藏';favorite.innerHTML=`<i class="${item.favorite?'fas':'far'} fa-star"></i>`;favorite.onclick=event=>{event.stopPropagation();toggleFavorite(item.id,favorite);};row.append(heading,content,full,favorite);return row;
         }
         function createLinkCard(item){
-            const row=document.createElement('div');row.dataset.linkRow='';row.dataset.linkId=item.id;row.dataset.created=itemUnix(item.createdAt);row.dataset.modified=itemUnix(item.modifiedAt);row.dataset.title=item.filename||'';row.className='link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300';
+            const row=document.createElement('div');row.dataset.linkRow='';row.dataset.linkId=item.id;row.dataset.revision=item.revision||0;row.dataset.created=itemUnix(item.createdAt);row.dataset.modified=itemUnix(item.modifiedAt);row.dataset.title=item.filename||'';row.className='link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300';
             const info=document.createElement('div');info.className='min-w-0 flex-1';const title=document.createElement('div');title.className='link-card-name font-semibold text-text mb-1';title.title=item.filename||'';title.textContent=item.filename||'';const url=document.createElement('div');url.dataset.linkUrl='';url.className='text-subtext0 break-all';url.textContent=item.content||'';info.append(title,url);
             const actions=document.createElement('div');actions.className='link-card-actions flex items-center gap-0 sm:gap-1 flex-shrink-0';actions.append(actionButton('fas fa-i-cursor','重命名',()=>showRenameModal(item.id,item.filename)));const open=document.createElement('a');open.href=item.content||'';open.target='_blank';open.rel='noopener noreferrer';open.title='在新标签页打开';open.className='w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline';open.innerHTML='<i class="fas fa-arrow-up-right-from-square"></i>';actions.append(open,actionButton('fas fa-copy','复制',button=>copyToClipboard(item.content||'',button)),actionButton('fas fa-trash','删除',button=>deleteItem(item.id,button)));row.append(info,actions);return row;
         }
@@ -954,6 +954,7 @@
             const row = document.createElement('div');
             row.dataset.fileRow = '';
             row.dataset.fileId = item.id;
+            row.dataset.revision = item.revision || 0;
             row.dataset.created = Math.floor(Date.parse(item.createdAt) / 1000) || Math.floor(Date.now() / 1000);
             row.dataset.modified = Math.floor(Date.parse(item.modifiedAt) / 1000) || row.dataset.created;
             row.dataset.title = item.filename;
@@ -1002,7 +1003,7 @@
                 const submit = this.querySelector('[type="submit"]');
                 submit.disabled = true;
                 const editing = this.action.includes('/edit/');
-                const request = editing ? (async()=>{localMutationInFlight++;try{const response=await fetch(this.action,{method:'POST',headers:{'Accept':'application/json'},body:new FormData(this)});if(!response.ok)throw new Error(await response.text()||`HTTP ${response.status}`);const result=await response.json();const old=eventCard(result.item.id);if(old)old.remove();await insertRenderedCard(result.item);closeAndResetNewItemModal();}finally{setTimeout(()=>{localMutationInFlight=Math.max(0,localMutationInFlight-1);},800);}})() : submitNewCard(this, closeAndResetNewItemModal);
+                const request = editing ? (async()=>{localMutationInFlight++;try{const id=this.action.split('/edit/')[1],old=eventCard(id),formData=new FormData(this);formData.append('expectedRevision',old?.dataset.revision||'');const response=await fetch(this.action,{method:'POST',headers:{'Accept':'application/json'},body:formData});if(!response.ok)throw new Error(await response.text()||`HTTP ${response.status}`);const result=await response.json();if(old)old.remove();await insertRenderedCard(result.item);closeAndResetNewItemModal();}finally{setTimeout(()=>{localMutationInFlight=Math.max(0,localMutationInFlight-1);},800);}})() : submitNewCard(this, closeAndResetNewItemModal);
                 request
                     .catch(error => alert(`${editing?'保存':'新增'} Snippet 失败：${error.message}`))
                     .finally(() => { submit.disabled = false; });

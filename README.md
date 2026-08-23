@@ -85,6 +85,12 @@ docker build -t local-content-share .
 
 ## 使用说明
 
+### 稳定 ID 与并发写入
+
+`/api/v1/items` 和结构化 SSE 事件中的 `id` 是永久 UUID，`storageId` 是当前物理路径，`revision` 是递增修订号。重命名只修改 `storageId`，不会改变 `id`。
+
+编辑、收藏、重命名和删除时可以提交 `expectedRevision`。如果服务器内容已经变化，接口返回 HTTP 409，并在 JSON 的 `item` 字段中提供当前版本。需要安全重试的写请求应携带唯一的 `Idempotency-Key` 请求头。
+
 ### 文字片段
 
 点击页面顶部的 `New`，可填写可选标题和正文。未填写标题时会自动使用时间作为名称。

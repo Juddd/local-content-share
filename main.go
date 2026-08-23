@@ -37,6 +37,8 @@ var content embed.FS
 
 type Entry struct {
 	ID         string    `json:"id"`
+	StorageID  string    `json:"storageId,omitempty"`
+	Revision   uint64    `json:"revision"`
 	Content    string    `json:"content"`
 	Type       string    `json:"type"`
 	Filename   string    `json:"filename"`
@@ -133,7 +135,38 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
+func expectedRevision(r *http.Request) uint64 {
+	v := r.FormValue("expectedRevision")
+	if v == "" {
+		v = r.Header.Get("If-Match")
+	}
+	v = strings.Trim(v, "\"")
+	n, _ := strconv.ParseUint(v, 10, 64)
+	return n
+}
+
+func writeRevisionConflict(w http.ResponseWriter, record IdentityRecord) {
+	item, _ := entryByStorage(record.Storage)
+	writeJSON(w, http.StatusConflict, map[string]any{"error": "revision_conflict", "item": item})
+}
+
+func entryByStorage(storage string) (*Entry, error) {
+	if strings.HasPrefix(storage, "files/") || strings.HasPrefix(storage, "text/") {
+		return contentEntry(storage)
+	}
+	if raw, ok := strings.CutPrefix(storage, "link/"); ok {
+		title, target := raw, raw
+		if parts := strings.SplitN(raw, "\t", 2); len(parts) == 2 {
+			title, target = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		}
+		times := itemTimeTracker.Get(storage, time.Now())
+		return stableEntry(&Entry{ID: storage, Type: "link", Filename: title, Content: target, CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt}), nil
+	}
+	return nil, fmt.Errorf("unsupported content id")
+}
+
 func contentFilePath(id string, allowedTypes ...string) (string, error) {
+	id = resolveStorageID(id)
 	if id == "" || strings.Contains(id, "\\") || path.IsAbs(id) || path.Clean(id) != id {
 		return "", fmt.Errorf("invalid content ID")
 	}
@@ -665,11 +698,16 @@ func (t *ExpirationTracker) CleanupExpired() []string {
 			_ = os.Remove(thumbnailPath(fileID))
 		}
 		itemTimeTracker.Delete(fileID)
+		_ = favorites.Delete(fileID)
 	}
 	if len(expiredFiles) > 0 {
 		t.saveToFile()
 		for _, id := range expiredFiles {
-			notifyContentDelete(id)
+			if record, err := identities.Delete(id, 0); err == nil {
+				notifyContentDelete(record.ID)
+			} else {
+				notifyContentDelete(id)
+			}
 		}
 	}
 	return expiredFiles
@@ -717,15 +755,17 @@ func generateUniqueFilename(baseDir, baseName string) string {
 }
 
 func fileEntry(id string) (*Entry, error) {
+	id = resolveStorageID(id)
 	info, err := os.Stat(filepath.Join("data", filepath.FromSlash(id)))
 	if err != nil {
 		return nil, err
 	}
 	times := itemTimeTracker.Get(id, info.ModTime())
-	return &Entry{ID: id, Type: "file", Filename: filepath.Base(id), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size()}, nil
+	return stableEntry(&Entry{ID: id, Type: "file", Filename: filepath.Base(id), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size()}), nil
 }
 
 func contentEntry(id string) (*Entry, error) {
+	id = resolveStorageID(id)
 	if strings.HasPrefix(id, "files/") {
 		return fileEntry(id)
 	}
@@ -740,7 +780,7 @@ func contentEntry(id string) (*Entry, error) {
 			return nil, err
 		}
 		times := itemTimeTracker.Get(id, info.ModTime())
-		return &Entry{ID: id, Type: "text", Filename: filepath.Base(id), Content: string(body), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size(), Favorite: favorites.Is(id)}, nil
+		return stableEntry(&Entry{ID: id, Type: "text", Filename: filepath.Base(id), Content: string(body), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size(), Favorite: favorites.Is(id)}), nil
 	}
 	return nil, fmt.Errorf("unsupported content id")
 }
@@ -919,6 +959,8 @@ func main() {
 	// Initialize the expiration tracker
 	expirationTracker = initExpirationTracker()
 	itemTimeTracker = initItemTimeTracker()
+	identities = newIdentityStore(filepath.Join("data", "identities.json"))
+	mutations = newMutationCache(filepath.Join("data", "mutation-results.json"))
 	customExpiry := os.Getenv("DEFAULT_EXPIRY")
 	if customExpiry != "" {
 		switch customExpiry {
@@ -1049,6 +1091,9 @@ func main() {
 		sort.SliceStable(entries, func(i, j int) bool {
 			return entries[i].CreatedAt.After(entries[j].CreatedAt)
 		})
+		for i := range entries {
+			stableEntry(&entries[i])
+		}
 		tmpl.ExecuteTemplate(w, "index.html", entries)
 	})
 
@@ -1117,6 +1162,9 @@ func main() {
 				times := itemTimeTracker.Get("link/"+stored, fallback)
 				entries = append(entries, Entry{ID: "link/" + url.PathEscape(stored), Type: "link", Content: linkURL, Filename: title, CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt})
 			}
+		}
+		for i := range entries {
+			stableEntry(&entries[i])
 		}
 		sort.SliceStable(entries, func(i, j int) bool { return entries[i].CreatedAt.After(entries[j].CreatedAt) })
 		clientMux.Lock()
@@ -1287,6 +1335,7 @@ func main() {
 		expiryOption := r.FormValue("expiry")
 		content := r.FormValue("content")
 		name := r.FormValue("name")
+		clientID := strings.TrimSpace(r.FormValue("clientId"))
 		createdName := ""
 		var createdItem *Entry
 		var createdItems []*Entry
@@ -1318,8 +1367,9 @@ func main() {
 				return
 			}
 			itemTimeTracker.Create("link/" + storedLink)
+			identities.EnsureWithID("link/"+storedLink, clientID)
 			now := time.Now()
-			createdItem = &Entry{ID: "link/" + storedLink, Type: "link", Content: content, Filename: name, CreatedAt: now, ModifiedAt: now}
+			createdItem = stableEntry(&Entry{ID: "link/" + storedLink, Type: "link", Content: content, Filename: name, CreatedAt: now, ModifiedAt: now})
 			if createdItem.Filename == "" {
 				createdItem.Filename = content
 			}
@@ -1384,9 +1434,10 @@ func main() {
 					return
 				}
 				itemTimeTracker.Create(filepath.Join("text", uniqueFileName))
+				identities.EnsureWithID(filepath.Join("text", uniqueFileName), clientID)
 				createdName = uniqueFileName
 				now := time.Now()
-				createdItem = &Entry{ID: filepath.Join("text", uniqueFileName), Type: "text", Content: content, Filename: uniqueFileName, CreatedAt: now, ModifiedAt: now}
+				createdItem = stableEntry(&Entry{ID: filepath.Join("text", uniqueFileName), Type: "text", Content: content, Filename: uniqueFileName, CreatedAt: now, ModifiedAt: now})
 				if expiryOption != "Never" {
 					fileID := filepath.Join("text", uniqueFileName)
 					expirationTracker.SetExpiration(fileID, expiryOption)
@@ -1564,7 +1615,12 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		oldPath := strings.TrimPrefix(r.URL.Path, "/rename/")
+		requestedID := strings.TrimPrefix(r.URL.Path, "/rename/")
+		oldPath := resolveStorageID(requestedID)
+		if record, ok := identities.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
+			writeRevisionConflict(w, record)
+			return
+		}
 		newName := r.FormValue("newname")
 		if newName == "" {
 			http.Error(w, "New name cannot be empty", http.StatusBadRequest)
@@ -1604,8 +1660,22 @@ func main() {
 			}
 			itemTimeTracker.Rename("link/"+storedLink, "link/"+newName+"\t"+linkURL)
 			newID := "link/" + newName + "\t" + linkURL
+			record, mutationErr := identities.Mutate(requestedID, newID, expectedRevision(r))
+			if mutationErr != nil {
+				if errors.Is(mutationErr, errRevisionConflict) {
+					writeRevisionConflict(w, record)
+					return
+				}
+				http.Error(w, mutationErr.Error(), 500)
+				return
+			}
 			times := itemTimeTracker.Get(newID, time.Now())
-			notifyContentRename("link/"+storedLink, &Entry{ID: newID, Type: "link", Filename: newName, Content: linkURL, CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt})
+			notifyContentRename(record.ID, stableEntry(&Entry{ID: newID, Type: "link", Filename: newName, Content: linkURL, CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt}))
+			if strings.Contains(r.Header.Get("Accept"), "application/json") {
+				item, _ := entryByStorage(newID)
+				writeJSON(w, 200, map[string]any{"status": "renamed", "item": item})
+				return
+			}
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 			log.Printf("Renamed link title to %s\n", newName)
 			return
@@ -1641,8 +1711,21 @@ func main() {
 		expirationTracker.mu.Unlock()
 		itemTimeTracker.Rename(oldPath, newID)
 		_ = favorites.Rename(oldPath, newID)
+		record, mutationErr := identities.Mutate(requestedID, newID, expectedRevision(r))
+		if mutationErr != nil {
+			if errors.Is(mutationErr, errRevisionConflict) {
+				writeRevisionConflict(w, record)
+				return
+			}
+			http.Error(w, mutationErr.Error(), 500)
+			return
+		}
 		if entry, entryErr := contentEntry(newID); entryErr == nil {
-			notifyContentRename(oldPath, entry)
+			notifyContentRename(record.ID, entry)
+			if strings.Contains(r.Header.Get("Accept"), "application/json") {
+				writeJSON(w, 200, map[string]any{"status": "renamed", "item": entry})
+				return
+			}
 		} else {
 			notifyContentChange()
 		}
@@ -1739,6 +1822,7 @@ func main() {
 			http.Error(w, "Only images can be thumbnailed", http.StatusBadRequest)
 			return
 		}
+		id = resolveStorageID(id)
 		path, err := ensureThumbnail(id)
 		if err != nil {
 			http.Error(w, "Thumbnail unavailable", http.StatusNotFound)
@@ -1754,7 +1838,12 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		id := strings.TrimPrefix(r.URL.Path, "/delete/")
+		requestedID := strings.TrimPrefix(r.URL.Path, "/delete/")
+		id := resolveStorageID(requestedID)
+		if record, ok := identities.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
+			writeRevisionConflict(w, record)
+			return
+		}
 		// Handle link deletion
 		if after, ok := strings.CutPrefix(id, "link/"); ok {
 			linkToDelete := after
@@ -1787,7 +1876,8 @@ func main() {
 				return
 			}
 			itemTimeTracker.Delete("link/" + linkToDelete)
-			notifyContentDelete("link/" + linkToDelete)
+			record, _ := identities.Delete(requestedID, expectedRevision(r))
+			notifyContentDelete(record.ID)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"status": "ok"}`))
@@ -1815,7 +1905,8 @@ func main() {
 		delete(expirationTracker.Expirations, id)
 		expirationTracker.saveToFile()
 		expirationTracker.mu.Unlock()
-		notifyContentDelete(id)
+		record, _ := identities.Delete(requestedID, expectedRevision(r))
+		notifyContentDelete(record.ID)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status": "ok"}`))
@@ -1827,7 +1918,12 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		id := strings.TrimPrefix(r.URL.Path, "/favorite/")
+		requestedID := strings.TrimPrefix(r.URL.Path, "/favorite/")
+		id := resolveStorageID(requestedID)
+		if record, ok := identities.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
+			writeRevisionConflict(w, record)
+			return
+		}
 		if _, err := contentFilePath(id, "text"); err != nil {
 			http.Error(w, "Can only favorite text snippets", http.StatusBadRequest)
 			return
@@ -1846,6 +1942,15 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		record, mutationErr := identities.Mutate(requestedID, "", expectedRevision(r))
+		if mutationErr != nil {
+			if errors.Is(mutationErr, errRevisionConflict) {
+				writeRevisionConflict(w, record)
+				return
+			}
+			http.Error(w, mutationErr.Error(), 500)
+			return
+		}
 		entry, err := contentEntry(id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1860,7 +1965,12 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		id := strings.TrimPrefix(r.URL.Path, "/edit/")
+		requestedID := strings.TrimPrefix(r.URL.Path, "/edit/")
+		id := resolveStorageID(requestedID)
+		if record, ok := identities.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
+			writeRevisionConflict(w, record)
+			return
+		}
 		filePath, pathErr := contentFilePath(id, "text")
 		if pathErr != nil {
 			http.Error(w, "Can only edit text snippets", http.StatusBadRequest)
@@ -1881,6 +1991,15 @@ func main() {
 			itemTimeTracker.Get(id, info.ModTime())
 		}
 		itemTimeTracker.Touch(id)
+		record, mutationErr := identities.Mutate(requestedID, "", expectedRevision(r))
+		if mutationErr != nil {
+			if errors.Is(mutationErr, errRevisionConflict) {
+				writeRevisionConflict(w, record)
+				return
+			}
+			http.Error(w, mutationErr.Error(), 500)
+			return
+		}
 		if entry, entryErr := contentEntry(id); entryErr == nil {
 			notifyContentItem("updated", entry)
 			if strings.Contains(r.Header.Get("Accept"), "application/json") {
@@ -1898,7 +2017,7 @@ func main() {
 	http.HandleFunc("/api/updates", handleContentUpdates)
 
 	// Start server
-	server := &http.Server{Addr: *listenAddress, Handler: http.DefaultServeMux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
+	server := &http.Server{Addr: *listenAddress, Handler: idempotencyMiddleware(http.DefaultServeMux), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
 	log.Fatal(server.ListenAndServe())
 }
 
