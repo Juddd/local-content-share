@@ -6,12 +6,18 @@ import android.database.sqlite.*;
 import android.net.Uri;
 import org.json.*;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Durable per-server cache and outbox. Payloads are JSON to keep migrations small and lossless. */
 final class SyncDatabase extends SQLiteOpenHelper {
     static final String SYNCED="synced", PENDING="pending", SYNCING="syncing", CONFLICT="conflict";
     static final class Operation { String id,itemId,type,payload; long baseRevision,createdAt; int attempts; }
     static final class PendingUpload { String id,server,path,name,expiry; int attempts; }
+    private static final AtomicBoolean OPERATIONS_DRAINING=new AtomicBoolean();
+    private static final Set<String> UPLOADS_IN_FLIGHT=Collections.newSetFromMap(new ConcurrentHashMap<>());
+    static boolean beginOperations(){return OPERATIONS_DRAINING.compareAndSet(false,true);}static void endOperations(){OPERATIONS_DRAINING.set(false);}
+    static boolean beginUpload(String id){return UPLOADS_IN_FLIGHT.add(id);}static void endUpload(String id){UPLOADS_IN_FLIGHT.remove(id);}
     SyncDatabase(Context context){super(context,"content-sync.db",null,2);}
     @Override public void onCreate(SQLiteDatabase db){
         db.execSQL("CREATE TABLE items(server TEXT NOT NULL,id TEXT NOT NULL,json TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,sync_state TEXT NOT NULL DEFAULT 'synced',conflict_json TEXT,PRIMARY KEY(server,id))");
@@ -33,7 +39,7 @@ final class SyncDatabase extends SQLiteOpenHelper {
     synchronized boolean hasPending(String server,String id){try(Cursor c=getReadableDatabase().rawQuery("SELECT 1 FROM pending_operations WHERE server=? AND item_id=? LIMIT 1",new String[]{server,id})){return c.moveToFirst();}}
     synchronized void applyRemote(String server,String oldId,JSONObject item)throws JSONException {if(hasPending(server,oldId)||hasPending(server,item.getString("id")))return;SQLiteDatabase db=getWritableDatabase();db.delete("items","server=? AND id=?",new String[]{server,oldId});putItem(db,server,item,SYNCED,null);}
     synchronized void applyDelete(String server,String id){if(!hasPending(server,id))removeLocal(server,id);}
-    synchronized void enqueue(String server,String itemId,String type,JSONObject payload,long baseRevision)throws JSONException {ContentValues v=new ContentValues();v.put("operation_id",UUID.randomUUID().toString());v.put("server",server);v.put("item_id",itemId);v.put("type",type);v.put("payload_json",payload.toString());v.put("base_revision",baseRevision);v.put("created_at",System.currentTimeMillis());getWritableDatabase().insertOrThrow("pending_operations",null,v);}
+    synchronized String enqueue(String server,String itemId,String type,JSONObject payload,long baseRevision)throws JSONException {String operationId=UUID.randomUUID().toString();ContentValues v=new ContentValues();v.put("operation_id",operationId);v.put("server",server);v.put("item_id",itemId);v.put("type",type);v.put("payload_json",payload.toString());v.put("base_revision",baseRevision);v.put("created_at",System.currentTimeMillis());getWritableDatabase().insertOrThrow("pending_operations",null,v);return operationId;}
     synchronized Operation next(String server){try(Cursor c=getReadableDatabase().rawQuery("SELECT operation_id,item_id,type,payload_json,base_revision,created_at,attempts FROM pending_operations WHERE server=? ORDER BY created_at LIMIT 1",new String[]{server})){if(!c.moveToFirst())return null;Operation o=new Operation();o.id=c.getString(0);o.itemId=c.getString(1);o.type=c.getString(2);o.payload=c.getString(3);o.baseRevision=c.getLong(4);o.createdAt=c.getLong(5);o.attempts=c.getInt(6);return o;}}
     synchronized void syncing(String server,String id){state(server,id,SYNCING,null);}
     synchronized void complete(String operationId,String server,String oldId,JSONObject serverItem)throws JSONException {SQLiteDatabase db=getWritableDatabase();db.beginTransaction();try{db.delete("pending_operations","operation_id=?",new String[]{operationId});if(serverItem!=null){String newId=serverItem.getString("id");db.delete("items","server=? AND id=?",new String[]{server,oldId});putItem(db,server,serverItem,hasPending(server,oldId)?PENDING:SYNCED,null);remapPending(db,server,oldId,newId,serverItem.optLong("revision"));}else db.delete("items","server=? AND id=?",new String[]{server,oldId});db.setTransactionSuccessful();}finally{db.endTransaction();}}
@@ -45,4 +51,5 @@ final class SyncDatabase extends SQLiteOpenHelper {
     synchronized ArrayList<PendingUpload> uploads(String server){ArrayList<PendingUpload> out=new ArrayList<>();try(Cursor c=getReadableDatabase().rawQuery("SELECT upload_id,server,path,name,expiry,attempts FROM pending_uploads WHERE server=? ORDER BY created_at",new String[]{server})){while(c.moveToNext()){PendingUpload u=new PendingUpload();u.id=c.getString(0);u.server=c.getString(1);u.path=c.getString(2);u.name=c.getString(3);u.expiry=c.getString(4);u.attempts=c.getInt(5);out.add(u);}}return out;}
     synchronized void uploadComplete(String id){getWritableDatabase().delete("pending_uploads","upload_id=?",new String[]{id});}
     synchronized void uploadFailed(String id,String error){getWritableDatabase().execSQL("UPDATE pending_uploads SET attempts=attempts+1,last_error=? WHERE upload_id=?",new Object[]{error,id});}
+    synchronized ArrayList<String> pendingServers(){ArrayList<String> out=new ArrayList<>();try(Cursor c=getReadableDatabase().rawQuery("SELECT server FROM pending_operations UNION SELECT server FROM pending_uploads",null)){while(c.moveToNext())out.add(c.getString(0));}return out;}
 }

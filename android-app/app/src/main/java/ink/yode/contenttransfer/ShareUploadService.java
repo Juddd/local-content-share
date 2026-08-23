@@ -19,12 +19,16 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -38,13 +42,14 @@ public class ShareUploadService extends Service {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private NotificationManager notificationManager;
+    private SyncDatabase syncDb;
 
     @Override public void onCreate() {
         super.onCreate();
         notificationManager = getSystemService(NotificationManager.class);
+        syncDb=new SyncDatabase(this);
         notificationManager.createNotificationChannel(new NotificationChannel(
                 CHANNEL_ID, "分享上传", NotificationManager.IMPORTANCE_LOW));
-        File cache=new File(getCacheDir(),"shared-uploads");File[] stale=cache.listFiles();if(stale!=null){long cutoff=System.currentTimeMillis()-86400000L;for(File file:stale)if(file.lastModified()<cutoff)file.delete();}
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -57,13 +62,24 @@ public class ShareUploadService extends Service {
         if (sharedText != null && !sharedText.trim().isEmpty()) {
             startForeground(2401, notification("正在发送文字到 Snippets"));
             io.execute(() -> {
+                String itemId=UUID.randomUUID().toString(),operationId=null;
                 try {
-                    String title = uploadText(baseUrl,sharedText);
+                    java.text.SimpleDateFormat titleFormat=new java.text.SimpleDateFormat("MM／dd HH-mm-ss",Locale.CHINA);titleFormat.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));String title=titleFormat.format(new Date());
+                    JSONObject item=new JSONObject().put("id",itemId).put("storageId","").put("type","text").put("filename",title).put("content",sharedText).put("createdAt",new Date().toInstant().toString()).put("modifiedAt",new Date().toInstant().toString()).put("size",0).put("favorite",false).put("revision",0);
+                    syncDb.putLocal(baseUrl,item,SyncDatabase.PENDING);
+                    JSONObject values=new JSONObject().put("clientId",itemId).put("content",sharedText).put("expiry","Never");JSONObject payload=new JSONObject().put("endpoint","/submit").put("values",values);
+                    operationId=syncDb.enqueue(baseUrl,itemId,"create",payload,0);SyncRetryJobService.schedule(this);
+                    if(!SyncDatabase.beginOperations())throw new IOException("后台同步任务正在运行");
+                    JSONObject result;try{result=uploadText(baseUrl,sharedText,itemId,operationId);syncDb.complete(operationId,baseUrl,itemId,result.optJSONObject("item"));}finally{SyncDatabase.endOperations();}
+                    title = result.optString("title",title);
+                    String savedTitle=title;
                     main.post(() -> Toast.makeText(this,
-                            "已发送到 Snippets：" + title, Toast.LENGTH_LONG).show());
+                            "已发送到 Snippets：" + savedTitle, Toast.LENGTH_LONG).show());
                 } catch (Exception error) {
+                    SyncRetryJobService.schedule(this);
+                    String feedback=operationId==null?"文字发送失败："+error.getMessage():"已加入待同步，联网后自动发送";
                     main.post(() -> Toast.makeText(this,
-                            "文字发送失败：" + error.getMessage(), Toast.LENGTH_LONG).show());
+                            feedback, Toast.LENGTH_LONG).show());
                 } finally {
                     stopSelf(startId);
                 }
@@ -79,20 +95,26 @@ public class ShareUploadService extends Service {
             for (int index = 0; index < count; index++) {
                 String name = names.get(index);
                 File file = null;
+                SyncDatabase.PendingUpload pending=null;
+                boolean completed=false;
                 int position = index + 1;
                 try {
                     updateProgress("正在准备 " + position + "/" + count + " · " + name, 0, 0, true);
                     file=stage(Uri.parse(uris.get(index)),name);
-                    String savedName = uploadWithRetry(baseUrl,file, name, position, count);
+                    pending=syncDb.addUpload(baseUrl,file.getAbsolutePath(),name,"Never");SyncRetryJobService.schedule(this);
+                    if(!SyncDatabase.beginUpload(pending.id))throw new IOException("后台上传任务正在运行");
+                    String savedName;try{savedName=uploadWithRetry(baseUrl,file, name, position, count,pending.id);syncDb.uploadComplete(pending.id);completed=true;}finally{SyncDatabase.endUpload(pending.id);}
                     broadcastProgress(savedName + " · 已上传到 Files", 100, 100, false, true);
                     main.post(() -> Toast.makeText(this,
                             savedName + " 已发送到 Files", Toast.LENGTH_LONG).show());
                 } catch (Exception error) {
-                    broadcastProgress(name + " · 上传失败：" + error.getMessage(), 0, 100, false, true);
+                    if(pending!=null)syncDb.uploadFailed(pending.id,error.getMessage());SyncRetryJobService.schedule(this);
+                    String feedback=pending==null?name+" 准备失败："+error.getMessage():name+" 已加入待上传队列，联网后自动发送";
+                    broadcastProgress(feedback, 0, 100, false, true);
                     main.post(() -> Toast.makeText(this,
-                            name + " 上传失败：" + error.getMessage(), Toast.LENGTH_LONG).show());
+                            feedback, Toast.LENGTH_LONG).show());
                 } finally {
-                    if(file!=null)file.delete();
+                    if(completed&&file!=null)file.delete();
                 }
             }
             stopSelf(startId);
@@ -100,9 +122,9 @@ public class ShareUploadService extends Service {
         return START_NOT_STICKY;
     }
 
-    private File stage(Uri uri,String name)throws Exception{File directory=new File(getCacheDir(),"shared-uploads");if(!directory.exists()&&!directory.mkdirs())throw new Exception("无法创建上传缓存");File file=File.createTempFile("share-",".tmp",directory);try(InputStream in=getContentResolver().openInputStream(uri);OutputStream out=new FileOutputStream(file)){if(in==null)throw new Exception("无法读取 "+name);byte[] buffer=new byte[65536];int count;while((count=in.read(buffer))>0)out.write(buffer,0,count);}catch(Exception error){file.delete();throw error;}return file;}
+    private File stage(Uri uri,String name)throws Exception{File directory=new File(getFilesDir(),"pending_uploads");if(!directory.exists()&&!directory.mkdirs())throw new Exception("无法创建上传队列");File file=File.createTempFile("share-",".pending",directory);try(InputStream in=getContentResolver().openInputStream(uri);OutputStream out=new FileOutputStream(file)){if(in==null)throw new Exception("无法读取 "+name);byte[] buffer=new byte[65536];int count;while((count=in.read(buffer))>0)out.write(buffer,0,count);}catch(Exception error){file.delete();throw error;}return file;}
 
-    private String uploadText(String baseUrl,String text) throws Exception {
+    private JSONObject uploadText(String baseUrl,String text,String itemId,String operationId) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(baseUrl + "/submit").openConnection();
         connection.setConnectTimeout(30000);
         connection.setReadTimeout(60000);
@@ -110,7 +132,8 @@ public class ShareUploadService extends Service {
         connection.setDoOutput(true);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8");
-        String body = "content=" + URLEncoder.encode(text, "UTF-8") + "&expiry=Never";
+        connection.setRequestProperty("Idempotency-Key",operationId);
+        String body = "content=" + URLEncoder.encode(text, "UTF-8") + "&expiry=Never&clientId="+URLEncoder.encode(itemId,"UTF-8");
         try (OutputStream out = connection.getOutputStream()) {
             out.write(body.getBytes(StandardCharsets.UTF_8));
         }
@@ -124,13 +147,12 @@ public class ShareUploadService extends Service {
             while ((count = in.read(buffer)) > 0) sink.write(buffer, 0, count);
         }
         if (code < 200 || code >= 400) throw new Exception("HTTP " + code);
-        String title = new JSONObject(sink.toString("UTF-8")).optString("title").trim();
+        JSONObject result=new JSONObject(sink.toString("UTF-8"));String title = result.optString("title").trim();
         if (title.isEmpty()) throw new Exception("服务器未返回 Snippet 标题");
-        return title;
+        return result;
     }
 
-    private String uploadWithRetry(String baseUrl,File file, String name, int position, int totalFiles) throws Exception {
-        String idempotencyKey=UUID.randomUUID().toString();
+    private String uploadWithRetry(String baseUrl,File file, String name, int position, int totalFiles,String idempotencyKey) throws Exception {
         Exception failure = null;
         for (int attempt = 1; attempt <= 3; attempt++) {
             try { return upload(baseUrl,file, name, position, totalFiles,idempotencyKey); }
@@ -239,6 +261,7 @@ public class ShareUploadService extends Service {
 
     @Override public void onDestroy() {
         io.shutdownNow();
+        if(syncDb!=null)syncDb.close();
         super.onDestroy();
     }
 }
