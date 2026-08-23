@@ -1,4 +1,3 @@
 data
 local-content-share
-# The private Android client contains personal NAS endpoints and stays on the NAS only.
-android-app/
+# Android build output and private signing material remain excluded by android-app/.gitignore.
