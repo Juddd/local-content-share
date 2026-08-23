@@ -6,6 +6,9 @@ import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
 import android.util.LruCache;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -64,14 +67,19 @@ public class MainActivity extends Activity {
     private TextView uploadProgressMessage;
     private ProgressBar uploadProgressBar;
     private int activeUploadCount;
+    private final Set<String> activePendingUploads=Collections.newSetFromMap(new ConcurrentHashMap<>());
     private boolean uploadDialogSuppressed;
     private boolean shareProgressReceiverRegistered;
+    private boolean networkCallbackRegistered;
+    private final ConnectivityManager.NetworkCallback networkCallback=new ConnectivityManager.NetworkCallback(){@Override public void onAvailable(Network network){mainHandler.post(()->{drainOutbox();resumePendingUploads();});}};
     private final BroadcastReceiver shareProgressReceiver=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){String message=intent.getStringExtra("message");if(message==null)return;boolean finished=intent.getBooleanExtra("finished",false),indeterminate=intent.getBooleanExtra("indeterminate",false);long sent=intent.getLongExtra("sent",0),total=intent.getLongExtra("total",0);if(!finished&&uploadProgressDialog==null)uploadDialogSuppressed=false;showUploadProgress(message,sent,indeterminate?-1:total);if(finished)mainHandler.postDelayed(()->{if(uploadProgressDialog!=null){uploadProgressDialog.dismiss();uploadProgressDialog=null;}},2500);}};
     private volatile boolean realtimeEnabled;
     private volatile int realtimeGeneration;
     private volatile HttpURLConnection realtimeConnection;
     private volatile long lastEventSequence = -1;
     private volatile int serverGeneration;
+    private SyncDatabase syncDb;
+    private final java.util.concurrent.atomic.AtomicBoolean drainingOutbox=new java.util.concurrent.atomic.AtomicBoolean();
     private final Runnable realtimeRefresh = this::refresh;
 
     private class TransferUi {
@@ -117,20 +125,31 @@ public class MainActivity extends Activity {
     }
 
     static class Item {
-        String id, type, filename, content, createdAt, modifiedAt;
-        long size; boolean favorite;
+        String id, storageId, type, filename, content, createdAt, modifiedAt, syncState="synced";
+        long size, revision; boolean favorite; JSONObject conflict;
         static Item from(JSONObject o) {
             Item i = new Item();
-            i.id=o.optString("id"); i.type=o.optString("type"); i.filename=o.optString("filename");
-            i.content=o.optString("content"); i.createdAt=o.optString("createdAt"); i.modifiedAt=o.optString("modifiedAt"); i.size=o.optLong("size"); i.favorite=o.optBoolean("favorite");
+            i.id=o.optString("id"); i.storageId=o.optString("storageId"); i.type=o.optString("type"); i.filename=o.optString("filename");
+            i.content=o.optString("content"); i.createdAt=o.optString("createdAt"); i.modifiedAt=o.optString("modifiedAt"); i.size=o.optLong("size"); i.favorite=o.optBoolean("favorite");i.revision=o.optLong("revision");i.syncState=o.optString("syncState","synced");i.conflict=o.optJSONObject("conflict");
             return i;
         }
+        JSONObject json()throws JSONException {JSONObject o=new JSONObject();o.put("id",id).put("storageId",storageId).put("type",type).put("filename",filename).put("content",content).put("createdAt",createdAt).put("modifiedAt",modifiedAt).put("size",size).put("favorite",favorite).put("revision",revision).put("syncState",syncState);return o;}
+    }
+
+    private class FavoriteDrawable extends Drawable {
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private final Item item;
+        FavoriteDrawable(Item item){this.item=item;paint.setTextAlign(Paint.Align.CENTER);paint.setTypeface(Typeface.DEFAULT);paint.setTextSize(dp(18));}
+        @Override public void draw(Canvas canvas){String symbol=item.favorite?"★":"☆";paint.setColor(item.favorite?Color.rgb(245,183,0):Color.rgb(120,115,122));paint.setAlpha(favoritePending.contains(item.id)?115:255);Paint.FontMetrics fm=paint.getFontMetrics();float x=getBounds().right-dp(18),y=getBounds().bottom-dp(2)-fm.descent;canvas.drawText(symbol,x,y,paint);}
+        @Override public void setAlpha(int alpha){paint.setAlpha(alpha);invalidateSelf();}
+        @Override public void setColorFilter(android.graphics.ColorFilter filter){paint.setColorFilter(filter);invalidateSelf();}
+        @Override public int getOpacity(){return PixelFormat.TRANSLUCENT;}
     }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},4201);
         prefs = getSharedPreferences("content-transfer", MODE_PRIVATE);
+        syncDb=new SyncDatabase(this);
         activeBase=ServerConfig.get(this);
         prefs.edit().remove("clipboard_diagnostics").apply();
         buildUi();
@@ -138,11 +157,11 @@ public class MainActivity extends Activity {
         if(activeBase.isEmpty())mainHandler.post(()->showServerConfig(true));
     }
 
-    @Override protected void onResume(){super.onResume();if(adapter!=null)renderSection();if(!activeBase.isEmpty()){refresh();startRealtimeUpdates();}}
+    @Override protected void onResume(){super.onResume();if(adapter!=null)renderSection();if(!activeBase.isEmpty()){refresh();startRealtimeUpdates();drainOutbox();resumePendingUploads();}}
 
-    @Override protected void onStart(){super.onStart();if(!shareProgressReceiverRegistered){IntentFilter filter=new IntentFilter(ShareUploadService.ACTION_UPLOAD_PROGRESS);if(Build.VERSION.SDK_INT>=33)registerReceiver(shareProgressReceiver,filter,Context.RECEIVER_NOT_EXPORTED);else registerReceiver(shareProgressReceiver,filter);shareProgressReceiverRegistered=true;}}
+    @Override protected void onStart(){super.onStart();if(!shareProgressReceiverRegistered){IntentFilter filter=new IntentFilter(ShareUploadService.ACTION_UPLOAD_PROGRESS);if(Build.VERSION.SDK_INT>=33)registerReceiver(shareProgressReceiver,filter,Context.RECEIVER_NOT_EXPORTED);else registerReceiver(shareProgressReceiver,filter);shareProgressReceiverRegistered=true;}if(!networkCallbackRegistered){try{getSystemService(ConnectivityManager.class).registerDefaultNetworkCallback(networkCallback);networkCallbackRegistered=true;}catch(Exception ignored){}}}
 
-    @Override protected void onStop(){if(shareProgressReceiverRegistered){unregisterReceiver(shareProgressReceiver);shareProgressReceiverRegistered=false;}super.onStop();}
+    @Override protected void onStop(){if(shareProgressReceiverRegistered){unregisterReceiver(shareProgressReceiver);shareProgressReceiverRegistered=false;}if(networkCallbackRegistered){try{getSystemService(ConnectivityManager.class).unregisterNetworkCallback(networkCallback);}catch(Exception ignored){}networkCallbackRegistered=false;}super.onStop();}
 
     @Override protected void onPause(){stopRealtimeUpdates();super.onPause();}
 
@@ -164,6 +183,8 @@ public class MainActivity extends Activity {
         if (value.startsWith("1.0.51\n")) value="1.0.52\n• 链接打开改为网页端跳转图标\n• 文字编辑改为网页端编辑图标\n\n"+value;
         if (value.startsWith("1.0.52\n")) value="1.0.53\n• 文字复制改为网页 fa-copy 同款图标\n• 收藏的 Snippet 始终排在普通项目之前\n\n"+value;
         if (value.startsWith("1.0.53\n")) value="1.0.54\n• Snippet 新增可同步的星标收藏按钮和收藏优先排序\n• 首次启动必须配置服务器地址，设置中可随时更改\n• 服务器地址永久保存，系统分享与主界面统一使用该配置\n• 移除源码中写死的个人 NAS 地址\n\n"+value;
+        if (value.startsWith("1.0.54\n")) value="1.0.55\n• 收藏星星改为直接覆盖绘制，不再改变文字卡片布局\n• 恢复原有卡片字号、间距、测量和分隔线表现\n• 保留右下角收藏触控区与无障碍操作\n\n"+value;
+        if (value.startsWith("1.0.55\n")) value="1.0.59\n• 新增真正的 SQLite 本地优先数据层和持久待同步队列\n• 新建、编辑、收藏、重命名和删除可离线完成并自动重试\n• 文件待上传队列在 App 重启后仍会保留并恢复上传\n• 卡片显示待同步、同步中、已同步和冲突状态\n• 冲突可选择保留本地、使用服务器或将本地另存副本\n• 内容改用稳定 UUID 和 revision，重命名不再改变身份\n\n1.0.58\n• 文件区和链接区采用与文字区一致的紧凑横向留白\n• 收藏星星下移至卡片底部，底边保留约 2px 间距\n\n1.0.57\n• 进一步缩窄文字卡片横向留白，左侧减少约三分之二，右侧减少约三分之一\n\n1.0.56\n• 缩窄文字卡片两侧横向留白，不改变字号和其它视觉\n\n"+value;
         TextView v = new TextView(this); v.setText(value); v.setTextSize(sp); v.setTextColor(color); v.setPadding(dp(12),dp(10),dp(12),dp(10)); return v;
     }
     private GradientDrawable rounded(int color,int radius) { GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d; }
@@ -225,8 +246,7 @@ public class MainActivity extends Activity {
     private void setStatus(String s) { runOnUiThread(()->status.setText(s)); }
 
     private void loadCache() {
-        String raw=activeBase.isEmpty()?"[]":prefs.getString("items:"+activeBase, "[]");
-        try { parseItems(new JSONArray(raw)); status.setText("已显示本地缓存，正在同步…"); } catch(Exception ignored) {}
+        try { parseItems(activeBase.isEmpty()?new JSONArray():syncDb.load(activeBase)); status.setText("已显示离线数据库，正在同步…"); } catch(Exception ignored) {}
     }
 
     private void parseItems(JSONArray array) throws JSONException {
@@ -270,9 +290,9 @@ public class MainActivity extends Activity {
                 activeNetwork=net;
                 String route=syncRoute(net);
                 if(requestGeneration!=serverGeneration||!requestBase.equals(activeBase))return;
-                JSONArray data=new JSONArray(raw); prefs.edit().putString("items:"+requestBase,data.toString()).apply();
+                JSONArray data=new JSONArray(raw); syncDb.replaceRemote(requestBase,data);
                 long finalSnapshotSequence=snapshotSequence;
-                runOnUiThread(()->{if(finalSnapshotSequence>=0&&lastEventSequence>finalSnapshotSequence){swipeRefresh.setRefreshing(false);mainHandler.postDelayed(this::refresh,150);return;}try{parseItems(data);}catch(Exception ignored){}if(finalSnapshotSequence>=0)lastEventSequence=Math.max(lastEventSequence,finalSnapshotSequence);status.setText("已同步（"+route+"）");swipeRefresh.setRefreshing(false);});
+                runOnUiThread(()->{if(finalSnapshotSequence>=0&&lastEventSequence>finalSnapshotSequence){swipeRefresh.setRefreshing(false);mainHandler.postDelayed(this::refresh,150);return;}try{parseItems(syncDb.load(requestBase));}catch(Exception ignored){}if(finalSnapshotSequence>=0)lastEventSequence=Math.max(lastEventSequence,finalSnapshotSequence);status.setText("已同步（"+route+"）");swipeRefresh.setRefreshing(false);drainOutbox();});
             } catch(Exception e) { if(requestGeneration==serverGeneration&&requestBase.equals(activeBase)){setStatus("离线显示缓存 · "+e.getMessage());runOnUiThread(()->swipeRefresh.setRefreshing(false));} }
         });
     }
@@ -321,8 +341,8 @@ public class MainActivity extends Activity {
         if(c!=null)c.disconnect();
     }
 
-    private void applyRemoteDelete(String id){if(id==null||id.isEmpty())return;deletingItems.remove(id);downloadProgress.remove(id);allItems.removeIf(item->item.id.equals(id));visibleItems.removeIf(item->item.id.equals(id));adapter.notifyDataSetChanged();}
-    private void applyRemoteItem(String oldId,Item updated){if(updated==null)return;allItems.removeIf(item->item.id.equals(oldId)||item.id.equals(updated.id));allItems.add(updated);renderSection();}
+    private void applyRemoteDelete(String id){if(id==null||id.isEmpty())return;syncDb.applyDelete(activeBase,id);deletingItems.remove(id);downloadProgress.remove(id);allItems.removeIf(item->item.id.equals(id));visibleItems.removeIf(item->item.id.equals(id));adapter.notifyDataSetChanged();}
+    private void applyRemoteItem(String oldId,Item updated){if(updated==null)return;try{syncDb.applyRemote(activeBase,oldId,updated.json());}catch(Exception ignored){}if(syncDb.hasPending(activeBase,oldId)||syncDb.hasPending(activeBase,updated.id)){reloadLocal(activeBase);return;}allItems.removeIf(item->item.id.equals(oldId)||item.id.equals(updated.id));allItems.add(updated);renderSection();}
 
     private void renderSection() {
         if(section.equals("notepad")){ showNotepad(); return; }
@@ -348,27 +368,29 @@ public class MainActivity extends Activity {
     private class ItemAdapter extends BaseAdapter {
         public int getCount(){return visibleItems.size();} public Object getItem(int p){return visibleItems.get(p);} public long getItemId(int p){return p;}
         public View getView(int p,View old,android.view.ViewGroup parent){
-            Item i=visibleItems.get(p); LinearLayout box=new LinearLayout(MainActivity.this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(14),dp(8),dp(14),dp(8));
+            Item i=visibleItems.get(p); LinearLayout box=new LinearLayout(MainActivity.this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(0,dp(8),0,dp(8));
             LinearLayout heading=new LinearLayout(MainActivity.this);heading.setGravity(Gravity.CENTER_VERTICAL); ImageView thumb=null;
             if(i.type.equals("file")&&isImageName(i.filename)){thumb=new ImageView(MainActivity.this);thumb.setScaleType(ImageView.ScaleType.CENTER_INSIDE);thumb.setTag(i.id);Bitmap cached=thumbnailCache.get(i.id);if(cached!=null)thumb.setImageBitmap(cached);heading.addView(thumb,new LinearLayout.LayoutParams(dp(70),dp(56)));if(cached==null)loadThumbnail(i,thumb);}
-            TextView name=text(i.filename,17,Color.rgb(40,35,45));name.setTypeface(null,1);name.setMaxLines(2);name.setEllipsize(android.text.TextUtils.TruncateAt.END);heading.addView(name,new LinearLayout.LayoutParams(0,-2,1));box.addView(heading);
+            String stateMark=i.syncState.equals(SyncDatabase.PENDING)?"  ⏳ 待同步":i.syncState.equals(SyncDatabase.SYNCING)?"  ↻ 同步中":i.syncState.equals(SyncDatabase.CONFLICT)?"  ⚠ 冲突":"";TextView name=text(i.filename+stateMark,17,i.syncState.equals(SyncDatabase.CONFLICT)?Color.rgb(190,80,40):Color.rgb(40,35,45));name.setTypeface(null,1);name.setMaxLines(2);name.setEllipsize(android.text.TextUtils.TruncateAt.END);name.setPadding(0,dp(10),dp(8),dp(10));heading.addView(name,new LinearLayout.LayoutParams(0,-2,1));box.addView(heading);
             String sub=i.type.equals("text")?preview(i.content):i.type.equals("file")?formatSize(i.size):i.content;
-            TextView detail=text(sub,14,Color.DKGRAY);detail.setMaxLines(i.type.equals("text")?5:2);
+            TextView detail=text(sub,14,Color.DKGRAY);detail.setMaxLines(i.type.equals("text")?5:2);detail.setPadding(0,dp(10),dp(8),dp(10));
             if(i.type.equals("file")) {
                 boolean local=isLocalAvailable(i);LinearLayout actionRow=new LinearLayout(MainActivity.this);actionRow.setGravity(Gravity.CENTER_VERTICAL);
-                detail.setGravity(Gravity.CENTER_VERTICAL);detail.setSingleLine(true);detail.setPadding(dp(4),0,dp(4),0);actionRow.addView(detail,new LinearLayout.LayoutParams(0,dp(40),1));
+                detail.setGravity(Gravity.CENTER_VERTICAL);detail.setSingleLine(true);detail.setPadding(0,0,dp(8),0);actionRow.addView(detail,new LinearLayout.LayoutParams(0,dp(40),1));
                 View[] buttons={fileActionButton(R.drawable.ic_action_download,"下载",true,v->download(i,false)),fileActionButton(R.drawable.ic_action_view,"打开",local,v->openLocal(i)),fileActionButton("🔗","复制地址",true,v->copy(activeBase+"/view/"+path(i.id))),fileActionButton(R.drawable.ic_action_rename,"重命名",true,v->rename(i)),fileActionButton("⌫","删除手机本地副本",local,v->deleteLocalCopy(i)),fileActionButton("🗑","删除 NAS 文件",true,v->delete(i))};
                 for(View button:buttons){LinearLayout.LayoutParams buttonParams=new LinearLayout.LayoutParams(dp(36),dp(38));buttonParams.setMargins(dp(1),0,dp(1),0);actionRow.addView(button,buttonParams);}box.addView(actionRow);
                 Integer progress=downloadProgress.get(i.id);box.setPadding(dp(14),dp(8),dp(14),dp(local||progress!=null?4:8));box.setBackground(rounded(Color.WHITE,16));box.setForeground(null);box.setAlpha(deletingItems.contains(i.id)?.45f:1f);if(progress!=null){ProgressBar line=new ProgressBar(MainActivity.this,null,android.R.attr.progressBarStyleHorizontal);line.setMax(100);line.setProgress(progress);line.setProgressTintList(android.content.res.ColorStateList.valueOf(Color.rgb(34,139,70)));line.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(226,235,228)));box.addView(line,new LinearLayout.LayoutParams(-1,dp(4)));}else if(local){View line=new View(MainActivity.this);line.setBackgroundColor(Color.rgb(34,139,70));box.addView(line,new LinearLayout.LayoutParams(-1,dp(3)));}
             } else box.addView(detail);
-            box.setOnClickListener(v->{if(i.type.equals("file")){if(!prefs.getString("downloaded_"+i.id,"").isEmpty())openLocal(i);}else openItem(i);});box.setOnLongClickListener(v->{actions(i);return true;});
+            box.setOnClickListener(v->{if(i.syncState.equals(SyncDatabase.CONFLICT)){showConflict(i);return;}if(i.type.equals("file")){if(!prefs.getString("downloaded_"+i.id,"").isEmpty())openLocal(i);}else openItem(i);});box.setOnLongClickListener(v->{actions(i);return true;});
             if(!i.type.equals("text"))return box;
-            FrameLayout frame=new FrameLayout(MainActivity.this);frame.addView(box,new FrameLayout.LayoutParams(-1,-2));
-            TextView star=text(i.favorite?"★":"☆",18,i.favorite?Color.rgb(245,183,0):Color.rgb(120,115,122));star.setGravity(Gravity.CENTER);star.setPadding(0,0,0,0);star.setContentDescription(i.favorite?"取消收藏":"收藏");boolean pending=favoritePending.contains(i.id);star.setEnabled(!pending);star.setAlpha(pending?.45f:1f);star.setOnClickListener(v->{v.setEnabled(false);toggleFavorite(i);});FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(dp(36),dp(36),Gravity.END|Gravity.BOTTOM);frame.addView(star,sp);return frame;
+            box.setForeground(new FavoriteDrawable(i));
+            box.setOnTouchListener((v,event)->{boolean inStar=event.getX()>=v.getWidth()-dp(36)&&event.getY()>=v.getHeight()-dp(36);if(!inStar)return false;if(event.getAction()==MotionEvent.ACTION_UP&&!favoritePending.contains(i.id))toggleFavorite(i);return true;});
+            box.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View host,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(host,info);info.addAction(new android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK,i.favorite?"取消收藏":"收藏"));}});
+            return box;
         }
     }
 
-    private void toggleFavorite(Item item){if(!favoritePending.add(item.id))return;boolean desired=!item.favorite;String requestBase=activeBase;int requestGeneration=serverGeneration;metadataIo.execute(()->{try{HttpURLConnection c=connection(activeNetwork,requestBase+"/favorite/"+path(item.id),7000);c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("Content-Type","application/x-www-form-urlencoded; charset=utf-8");c.getOutputStream().write(("favorite="+desired).getBytes(StandardCharsets.UTF_8));JSONObject result=new JSONObject(read(c));Item updated=Item.from(result.getJSONObject("item"));runOnUiThread(()->{favoritePending.remove(item.id);if(requestGeneration!=serverGeneration)return;applyRemoteItem(item.id,updated);list.setAlpha(.72f);list.animate().alpha(1f).setDuration(230).start();});}catch(Exception e){runOnUiThread(()->{favoritePending.remove(item.id);renderSection();toast("收藏操作失败："+e.getMessage());});}});}
+    private void toggleFavorite(Item item){if(!favoritePending.add(item.id))return;item.favorite=!item.favorite;queueMutation(item,"favorite",map("favorite",String.valueOf(item.favorite)));favoritePending.remove(item.id);renderSection();}
 
     private String preview(String s){int limit=prefs.getInt("preview",600);int[] cp=s.codePoints().toArray();return cp.length<=limit?s:new String(cp,0,limit)+"… 点击查看全文";}
     private String formatSize(long b){if(b<1024)return b+" B";if(b<1048576)return String.format(Locale.CHINA,"%.1f KB",b/1024d);if(b<1073741824)return String.format(Locale.CHINA,"%.1f MB",b/1048576d);return String.format(Locale.CHINA,"%.2f GB",b/1073741824d);}
@@ -400,7 +422,7 @@ public class MainActivity extends Activity {
         LinearLayout box=new LinearLayout(this);box.setPadding(dp(18),0,dp(18),0);box.setOrientation(LinearLayout.VERTICAL);EditText name=input("标题（可选）",false),body=input("正文",true);box.addView(name);box.addView(body);
         Spinner expiry=new Spinner(this);String[] expiryLabels={"永不过期","1 小时","4 小时","1 天"};String[] expiryValues={"Never","1 hour","4 hours","1 day"};ArrayAdapter<String> expiryAdapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,expiryLabels);expiry.setAdapter(expiryAdapter);LinearLayout expiryRow=new LinearLayout(this);expiryRow.setGravity(Gravity.CENTER_VERTICAL);TextView expiryHint=text("保存时间",14,Color.DKGRAY);expiryRow.addView(expiryHint,new LinearLayout.LayoutParams(0,-2,1));expiryRow.addView(expiry,new LinearLayout.LayoutParams(dp(150),-2));box.addView(expiryRow);
         if(existing!=null){name.setText(existing.filename);name.setEnabled(false);body.setText(existing.content);}
-        new AlertDialog.Builder(this).setTitle(existing==null?"新建文字":"编辑文字").setView(box).setPositiveButton("保存",(d,w)->{if(existing==null)postForm("/submit",map("name",name.getText().toString(),"content",body.getText().toString(),"expiry",expiryValues[expiry.getSelectedItemPosition()]));else postForm("/edit/"+path(existing.id),map("content",body.getText().toString()));}).setNegativeButton("取消",null).show();
+        new AlertDialog.Builder(this).setTitle(existing==null?"新建文字":"编辑文字").setView(box).setPositiveButton("保存",(d,w)->{if(existing==null)postForm("/submit",map("name",name.getText().toString(),"content",body.getText().toString(),"expiry",expiryValues[expiry.getSelectedItemPosition()]));else{existing.content=body.getText().toString();existing.modifiedAt=isoNow();queueMutation(existing,"edit",map("content",existing.content));}}).setNegativeButton("取消",null).show();
     }
     private void editText(Item i){textForm(i);}
     private void linkForm(){LinearLayout box=new LinearLayout(this);box.setPadding(dp(18),0,dp(18),0);box.setOrientation(LinearLayout.VERTICAL);EditText n=input("标题",false),u=input("https://example.com",false);box.addView(n);box.addView(u);new AlertDialog.Builder(this).setTitle("新建链接").setView(box).setPositiveButton("保存",(d,w)->postForm("/submit",map("type","link","name",n.getText().toString(),"content",u.getText().toString()))).setNegativeButton("取消",null).show();}
@@ -408,15 +430,24 @@ public class MainActivity extends Activity {
     private void urlDownloadForm(String expiry){LinearLayout box=new LinearLayout(this);box.setPadding(dp(18),0,dp(18),0);box.setOrientation(LinearLayout.VERTICAL);EditText u=input("https://example.com/file.zip",false),n=input("保存名称（可选）",false);box.addView(u);box.addView(n);new AlertDialog.Builder(this).setTitle("从 URL 下载").setView(box).setPositiveButton("下载",(d,w)->downloadURLToNAS(u.getText().toString(),n.getText().toString(),expiry)).setNegativeButton("取消",null).show();}
     private Map<String,String> map(String...x){Map<String,String>m=new LinkedHashMap<>();for(int i=0;i<x.length;i+=2)m.put(x[i],x[i+1]);return m;}
 
-    private void rename(Item i){EditText e=input("新名称",false);e.setText(i.filename);new AlertDialog.Builder(this).setTitle("重命名").setView(e).setPositiveButton("保存",(d,w)->postForm("/rename/"+path(i.id),map("newname",e.getText().toString()))).setNegativeButton("取消",null).show();}
-    private void delete(Item i){if(!deletingItems.add(i.id))return;renderSection();metadataIo.execute(()->{try{HttpURLConnection c=connection(activeNetwork,activeBase+"/delete/"+path(i.id),7000);c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("Content-Type","application/x-www-form-urlencoded; charset=utf-8");c.getOutputStream().write(new byte[0]);read(c);runOnUiThread(()->{applyRemoteDelete(i.id);toast("已删除 NAS 文件");});}catch(Exception e){runOnUiThread(()->{deletingItems.remove(i.id);renderSection();setStatus("删除失败 · "+e.getMessage());});}});}
+    private void rename(Item i){EditText e=input("新名称",false);e.setText(i.filename);new AlertDialog.Builder(this).setTitle("重命名").setView(e).setPositiveButton("保存",(d,w)->{i.filename=e.getText().toString();i.modifiedAt=isoNow();queueMutation(i,"rename",map("newname",i.filename));}).setNegativeButton("取消",null).show();}
+    private void delete(Item i){if(!deletingItems.add(i.id))return;try{JSONObject local=i.json().put("localDeleted",true);syncDb.putLocal(activeBase,local,SyncDatabase.PENDING);JSONObject payload=operationPayload("/delete/"+path(i.id),map());syncDb.enqueue(activeBase,i.id,"delete",payload,i.revision);allItems.removeIf(item->item.id.equals(i.id));visibleItems.removeIf(item->item.id.equals(i.id));adapter.notifyDataSetChanged();setStatus("待同步 · 删除 "+i.filename);drainOutbox();}catch(Exception e){deletingItems.remove(i.id);setStatus("无法加入待同步队列 · "+e.getMessage());}}
     private void deleteLocalCopy(Item item){String key="downloaded_"+item.id;String saved=prefs.getString(key,"");if(saved.isEmpty()){renderSection();return;}try{Uri uri=Uri.parse(saved);int deleted=getContentResolver().delete(uri,null,null);if(deleted<=0){try(android.os.ParcelFileDescriptor fd=getContentResolver().openFileDescriptor(uri,"r")){if(fd!=null)throw new IOException("系统未允许删除该文件");}}prefs.edit().remove(key).apply();toast("已删除手机本地副本");renderSection();}catch(Exception error){toast("删除本地副本失败："+error.getMessage());}}
 
     private void postForm(String endpoint,Map<String,String> values) {
-        setStatus("正在保存…");metadataIo.execute(()->{try{StringBuilder b=new StringBuilder();for(Map.Entry<String,String>e:values.entrySet()){if(b.length()>0)b.append('&');b.append(URLEncoder.encode(e.getKey(),"UTF-8")).append('=').append(URLEncoder.encode(e.getValue(),"UTF-8"));}HttpURLConnection c=connection(activeNetwork,activeBase+endpoint,7000);c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("Content-Type","application/x-www-form-urlencoded; charset=utf-8");c.getOutputStream().write(b.toString().getBytes(StandardCharsets.UTF_8));read(c);runOnUiThread(()->{toast("已保存");refresh();});}catch(Exception e){setStatus("操作失败 · "+e.getMessage());}});
+        try{Item i=new Item();i.id=UUID.randomUUID().toString();i.storageId="";i.type="link".equals(values.get("type"))?"link":"text";i.filename=values.get("name");if(i.filename==null||i.filename.trim().isEmpty())i.filename=new java.text.SimpleDateFormat("MM／dd HH-mm-ss",Locale.CHINA).format(new Date());i.content=values.get("content");i.createdAt=i.modifiedAt=isoNow();i.syncState=SyncDatabase.PENDING;values.put("clientId",i.id);allItems.add(i);syncDb.putLocal(activeBase,i.json(),SyncDatabase.PENDING);syncDb.enqueue(activeBase,i.id,"create",operationPayload(endpoint,values),0);renderSection();setStatus("待同步 · "+i.filename);drainOutbox();}catch(Exception e){setStatus("无法加入待同步队列 · "+e.getMessage());}
     }
 
+    private String isoNow(){return new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX",Locale.ROOT).format(new Date());}
+    private JSONObject operationPayload(String endpoint,Map<String,String> values)throws JSONException{JSONObject p=new JSONObject(),v=new JSONObject();p.put("endpoint",endpoint);for(Map.Entry<String,String> e:values.entrySet())v.put(e.getKey(),e.getValue());p.put("values",v);return p;}
+    private void queueMutation(Item item,String type,Map<String,String> values){try{item.syncState=SyncDatabase.PENDING;syncDb.putLocal(activeBase,item.json(),SyncDatabase.PENDING);syncDb.enqueue(activeBase,item.id,type,operationPayload("/"+type+"/"+path(item.id),values),item.revision);renderSection();setStatus("待同步 · "+item.filename);drainOutbox();}catch(Exception e){setStatus("无法加入待同步队列 · "+e.getMessage());}}
+
     private String formBody(Map<String,String> values)throws Exception{StringBuilder b=new StringBuilder();for(Map.Entry<String,String>e:values.entrySet()){if(b.length()>0)b.append('&');b.append(URLEncoder.encode(e.getKey(),"UTF-8")).append('=').append(URLEncoder.encode(e.getValue(),"UTF-8"));}return b.toString();}
+
+    private void drainOutbox(){if(activeBase.isEmpty()||!drainingOutbox.compareAndSet(false,true))return;final String base=activeBase;metadataIo.execute(()->{long retryDelay=0;try{while(base.equals(activeBase)){SyncDatabase.Operation op=syncDb.next(base);if(op==null)break;syncDb.syncing(base,op.itemId);runOnUiThread(()->reloadLocal(base));try{JSONObject payload=new JSONObject(op.payload),values=payload.getJSONObject("values");values.put("expectedRevision",op.baseRevision);StringBuilder body=new StringBuilder();Iterator<String> keys=values.keys();while(keys.hasNext()){String k=keys.next();if(body.length()>0)body.append('&');body.append(URLEncoder.encode(k,"UTF-8")).append('=').append(URLEncoder.encode(values.optString(k),"UTF-8"));}HttpURLConnection c=connection(findNetwork(false),base+payload.getString("endpoint"),10000);c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("Content-Type","application/x-www-form-urlencoded; charset=utf-8");c.setRequestProperty("Idempotency-Key",op.id);c.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8));int code=c.getResponseCode();InputStream input=code>=200&&code<300?c.getInputStream():c.getErrorStream();ByteArrayOutputStream bytes=new ByteArrayOutputStream();if(input!=null){byte[] b=new byte[8192];int n;while((n=input.read(b))>0)bytes.write(b,0,n);}String raw=bytes.toString("UTF-8");if(code==409){JSONObject conflict=new JSONObject(raw);syncDb.conflict(op.id,base,op.itemId,conflict.optJSONObject("item"));runOnUiThread(()->{reloadLocal(base);toast("检测到同步冲突，请处理标记项目");});continue;}if(code<200||code>=300)throw new IOException("HTTP "+code+" "+raw);JSONObject item=null;if(!raw.trim().isEmpty()){JSONObject response=new JSONObject(raw);item=response.optJSONObject("item");if(item==null){JSONArray items=response.optJSONArray("items");if(items!=null&&items.length()>0)item=items.optJSONObject(0);}}syncDb.complete(op.id,base,op.itemId,item);runOnUiThread(()->reloadLocal(base));}catch(Exception e){syncDb.retry(op.id,e.getMessage());retryDelay=Math.min(60000L,1500L*(1L<<Math.min(op.attempts,5)));setStatus("待同步，稍后重试 · "+e.getMessage());break;}}}finally{drainingOutbox.set(false);if(retryDelay>0){long delay=retryDelay;mainHandler.postDelayed(this::drainOutbox,delay);}}});}
+    private void reloadLocal(String base){if(!base.equals(activeBase))return;try{parseItems(syncDb.load(base));}catch(Exception ignored){}}
+    private void showConflict(Item item){if(item.conflict==null){toast("冲突详情不可用");return;}new AlertDialog.Builder(this).setTitle("同步冲突 · "+item.filename).setMessage("服务器内容在离线期间已被其它客户端修改。请选择保留哪一份。").setPositiveButton("保留本地",(d,w)->resolveConflict(item,true,false)).setNegativeButton("使用服务器",(d,w)->resolveConflict(item,false,false)).setNeutralButton("本地另存副本",(d,w)->resolveConflict(item,false,true)).show();}
+    private void resolveConflict(Item item,boolean keepLocal,boolean copyLocal){try{JSONObject remote=item.conflict.optJSONObject("remote");if(copyLocal&&item.type.equals("text")){postForm("/submit",map("name",item.filename+"（冲突副本）","content",item.content,"expiry","Never"));}if(keepLocal){JSONObject payload=item.conflict.getJSONObject("payload");String type=item.conflict.optString("type");long revision=remote==null?0:remote.optLong("revision");item.revision=revision;item.syncState=SyncDatabase.PENDING;JSONObject local=item.json();if(type.equals("delete"))local.put("localDeleted",true);syncDb.putLocal(activeBase,local,SyncDatabase.PENDING);syncDb.enqueue(activeBase,item.id,type,payload,revision);drainOutbox();}else if(remote!=null){syncDb.putLocal(activeBase,remote,SyncDatabase.SYNCED);}else syncDb.removeLocal(activeBase,item.id);reloadLocal(activeBase);}catch(Exception e){toast("处理冲突失败："+e.getMessage());}}
 
     private void downloadURLToNAS(String url,String name,String expiry){
         TransferUi ui=new TransferUi("NAS 从 URL 下载");
@@ -437,8 +468,10 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request==PICK_FILE&&result==RESULT_OK&&data!=null){if(data.getData()!=null)takePersistable(data.getData(),data);if(data.getClipData()!=null){for(int n=0;n<data.getClipData().getItemCount();n++){Uri u=data.getClipData().getItemAt(n).getUri();takePersistable(u,data);upload(u);}}else if(data.getData()!=null)upload(data.getData());}}
     private String displayName(Uri uri){String name=null;try(Cursor c=getContentResolver().query(uri,new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)){if(c!=null&&c.moveToFirst())name=c.getString(0);}catch(Exception ignored){}if(name==null||name.trim().isEmpty())name="upload";if(name.lastIndexOf('.')<=0){String type=getContentResolver().getType(uri);String extension=type==null?null:MimeTypeMap.getSingleton().getExtensionFromMimeType(type.toLowerCase(Locale.ROOT));if(extension!=null&&!extension.isEmpty())name+="."+extension;}return name;}
     private void upload(Uri uri){stageAndUpload(uri);}
-    private void stageAndUpload(Uri uri){String name=displayName(uri);UploadTaskUi task=new UploadTaskUi(name);toast("已加入上传任务："+name);transferIo.execute(()->{File temp=null;try{task.preparing();File dir=new File(getCacheDir(),"uploads");dir.mkdirs();temp=File.createTempFile("upload-",".bin",dir);try(InputStream in=getContentResolver().openInputStream(uri);OutputStream out=new FileOutputStream(temp)){if(in==null)throw new IOException("无法读取文件");byte[]b=new byte[65536];int n;while((n=in.read(b))>0)out.write(b,0,n);}uploadFile(temp,name,task);}catch(Exception e){if(temp!=null)temp.delete();task.failed(name,e.getMessage());}});}
-    private void uploadFile(File file,String name,UploadTaskUi task){String idempotencyKey=UUID.randomUUID().toString();for(int attempt=1;attempt<=3;attempt++){try{String boundary="----ContentTransfer"+System.currentTimeMillis();HttpURLConnection c=connection(activeNetwork,activeBase+"/upload-stream",30000);c.setReadTimeout(300000);c.setRequestMethod("POST");c.setDoOutput(true);c.setChunkedStreamingMode(65536);c.setRequestProperty("Content-Type","multipart/form-data; boundary="+boundary);c.setRequestProperty("Idempotency-Key",idempotencyKey);OutputStream out=c.getOutputStream();String safeName=name.replace("\"","").replace("\r"," ").replace("\n"," ");String head="--"+boundary+"\r\nContent-Disposition: form-data; name=\"expiry\"\r\n\r\n"+pendingExpiry+"\r\n--"+boundary+"\r\nContent-Disposition: form-data; name=\"file-upload\"; filename=\""+safeName+"\"\r\nContent-Type: application/octet-stream\r\n\r\n";out.write(head.getBytes(StandardCharsets.UTF_8));long total=file.length(),sent=0;try(InputStream in=new FileInputStream(file)){byte[]buf=new byte[65536];int n;while((n=in.read(buf))>0){out.write(buf,0,n);sent+=n;task.uploading(name,sent,total);}}out.write(("\r\n--"+boundary+"--\r\n").getBytes(StandardCharsets.UTF_8));out.close();task.waiting(name);read(c);file.delete();task.complete(name);runOnUiThread(this::refresh);return;}catch(Exception e){if(attempt==3){file.delete();task.failed(name,e.getMessage());}}}}
+    private void stageAndUpload(Uri uri){String name=displayName(uri),server=activeBase,expiry=pendingExpiry;UploadTaskUi task=new UploadTaskUi(name);toast("已加入持久上传队列："+name);transferIo.execute(()->{File temp=null;try{task.preparing();File dir=new File(getFilesDir(),"pending_uploads");dir.mkdirs();temp=new File(dir,UUID.randomUUID()+".pending");try(InputStream in=getContentResolver().openInputStream(uri);OutputStream out=new FileOutputStream(temp)){if(in==null)throw new IOException("无法读取文件");byte[]b=new byte[65536];int n;while((n=in.read(b))>0)out.write(b,0,n);}SyncDatabase.PendingUpload upload=syncDb.addUpload(server,temp.getAbsolutePath(),name,expiry);uploadPendingFile(upload,task);}catch(Exception e){if(temp!=null)temp.delete();task.failed(name,e.getMessage());}});}
+    private void resumePendingUploads(){for(SyncDatabase.PendingUpload upload:syncDb.uploads(activeBase)){if(!activePendingUploads.add(upload.id))continue;UploadTaskUi task=new UploadTaskUi(upload.name);transferIo.execute(()->uploadPendingFile(upload,task));}}
+    private void uploadPendingFile(SyncDatabase.PendingUpload upload,UploadTaskUi task){activePendingUploads.add(upload.id);try{uploadFile(upload,task);}finally{activePendingUploads.remove(upload.id);}}
+    private void uploadFile(SyncDatabase.PendingUpload upload,UploadTaskUi task){File file=new File(upload.path);for(int attempt=1;attempt<=3;attempt++){try{if(!upload.server.equals(activeBase))throw new IOException("该任务属于另一服务器");String boundary="----ContentTransfer"+System.currentTimeMillis();HttpURLConnection c=connection(activeNetwork,upload.server+"/upload-stream",30000);c.setReadTimeout(300000);c.setRequestMethod("POST");c.setDoOutput(true);c.setChunkedStreamingMode(65536);c.setRequestProperty("Content-Type","multipart/form-data; boundary="+boundary);c.setRequestProperty("Idempotency-Key",upload.id);OutputStream out=c.getOutputStream();String safeName=upload.name.replace("\"","").replace("\r"," ").replace("\n"," ");String head="--"+boundary+"\r\nContent-Disposition: form-data; name=\"expiry\"\r\n\r\n"+upload.expiry+"\r\n--"+boundary+"\r\nContent-Disposition: form-data; name=\"file-upload\"; filename=\""+safeName+"\"\r\nContent-Type: application/octet-stream\r\n\r\n";out.write(head.getBytes(StandardCharsets.UTF_8));long total=file.length(),sent=0;try(InputStream in=new FileInputStream(file)){byte[]buf=new byte[65536];int n;while((n=in.read(buf))>0){out.write(buf,0,n);sent+=n;task.uploading(upload.name,sent,total);}}out.write(("\r\n--"+boundary+"--\r\n").getBytes(StandardCharsets.UTF_8));out.close();task.waiting(upload.name);read(c);syncDb.uploadComplete(upload.id);file.delete();task.complete(upload.name);runOnUiThread(this::refresh);return;}catch(Exception e){if(attempt==3){syncDb.uploadFailed(upload.id,e.getMessage());task.failed(upload.name,"待网络恢复后自动重试："+e.getMessage());mainHandler.postDelayed(this::resumePendingUploads,Math.min(60000L,3000L*(upload.attempts+1)));}}}}
 
     private String downloadName(String filename){
         if(filename==null||filename.trim().isEmpty())return "download.bin";

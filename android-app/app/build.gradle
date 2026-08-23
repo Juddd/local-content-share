@@ -8,8 +8,8 @@ android {
         applicationId 'ink.yode.contenttransfer'
         minSdk 26
         targetSdk 36
-        versionCode 55
-        versionName '1.0.54'
+        versionCode 60
+        versionName '1.0.59'
     }
 
     signingConfigs {
