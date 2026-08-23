@@ -54,10 +54,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           curl --fail --location --retry 3 \
-            -o content-transfer-v1.0.54.apk \
-            http://nas.yode.ink:8084/download/files/content-transfer-v1.0.54.apk
-          echo "3428141db4d7feaeff6c74b4f6cc19d68b540c742279843e8aa75869f024629d  content-transfer-v1.0.54.apk" | sha256sum --check
-          gh release upload "$RELEASE_TAG" content-transfer-v1.0.54.apk --clobber
+            -o content-transfer-v1.0.60.apk \
+            http://nas.yode.ink:8084/download/files/content-transfer-v1.0.60.apk
+          echo "266b7604e228bc498ad840a5dca269eb029d20ced4d163c54de7bdb61f599df4  content-transfer-v1.0.60.apk" | sha256sum --check
+          gh release upload "$RELEASE_TAG" content-transfer-v1.0.60.apk --clobber
 
   publish-image:
     needs: test
