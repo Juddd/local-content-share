@@ -217,22 +217,22 @@
                 <div class="flex flex-wrap items-center justify-center gap-3 mb-4">
                     <button id="new-link-button" type="button" class="flex items-center gap-2 px-4 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors">
                         <i class="fas fa-link text-subtext0"></i>
-                        <span class="font-medium text-sm text-subtext0">Link</span>
+                        <span class="font-medium text-sm text-subtext0">链接</span>
                     </button>
                     <button type="button" id="new-button" class="flex items-center gap-2 px-4 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors">
                         <i class="fas fa-pen-nib text-subtext0"></i>
-                        <span class="font-medium text-sm text-subtext0">New</span>
+                        <span class="font-medium text-sm text-subtext0">新增</span>
                     </button>
                     <a href="/md" class="flex items-center gap-2 px-4 py-2 bg-base hover:bg-surface0 rounded-xl transition-colors no-underline">
                         <i class="fas fa-note-sticky text-subtext0"></i>
-                        <span class="font-medium text-sm text-subtext0">Notepad</span>
+                        <span class="font-medium text-sm text-subtext0">记事本</span>
                     </a>
                 </div>
             </section>
 
             <!-- Snippets Section -->
             <section class="content-section">
-                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Snippets</h2>{{template "section-sort" "snippets-list"}}</div>
+                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">文字</h2>{{template "section-sort" "snippets-list"}}</div>
                 <div id="snippets-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "text"}}
                     <div data-snippet-row data-snippet-id="{{.ID}}" data-favorite="{{if .Favorite}}1{{else}}0{{end}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
@@ -255,7 +255,7 @@
 
             <!-- Files Section -->
             <section class="content-section">
-                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Files</h2>{{template "section-sort" "files-list"}}</div>
+                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">文件</h2>{{template "section-sort" "files-list"}}</div>
                 <div id="files-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "file"}}
                     <div data-file-row data-file-id="{{.ID}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="file-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
@@ -277,7 +277,7 @@
 
             <!-- Links Section -->
             <section class="content-section">
-                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Links</h2>{{template "section-sort" "links-list"}}</div>
+                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">链接</h2>{{template "section-sort" "links-list"}}</div>
                 <div id="links-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "link"}}
                     <div data-link-row data-link-id="{{.ID}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
@@ -357,7 +357,7 @@
     <div id="new-link-modal" class="hidden fixed inset-0 bg-overlay2/70 dark:bg-black/70 flex items-center justify-center max-w-full p-4 z-50">
         <div id="link-modal-backdrop" class="absolute inset-0"></div>
         <div class="bg-crust rounded-3xl p-6 w-full max-w-md z-10">
-            <h3 class="text-lg font-medium text-text mb-4">Add a new Link</h3>
+            <h3 class="text-lg font-medium text-text mb-4">新增链接</h3>
             <form id="new-link-form" action="/submit" method="POST" enctype="multipart/form-data">
                 <input type="hidden" name="type" value="link">
                 <input type="text" name="name" required placeholder="Title" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl mb-3">
@@ -899,23 +899,27 @@
         const newItemForm = document.getElementById('new-item-form');
         async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const snapshot=Number(response.headers.get('X-Content-Sequence'));const html=await response.text();if(Number.isFinite(snapshot)&&lastEventSequence!==null&&lastEventSequence>snapshot){setTimeout(()=>refreshContentSections().catch(()=>{}),150);return;}const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});if(Number.isFinite(snapshot))lastEventSequence=Math.max(lastEventSequence??-1,snapshot);initializeSortControls();renderSnippetPreviews();}
 
+        function actionButton(icon,title,handler){const button=document.createElement('button');button.className='w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors';button.title=title;button.innerHTML=`<i class="${icon}"></i>`;button.onclick=event=>{event.stopPropagation();handler(button);};return button;}
+        function itemUnix(value){const parsed=Date.parse(value);return Number.isFinite(parsed)?Math.floor(parsed/1000):Math.floor(Date.now()/1000);}
+        function createSnippetCard(item){
+            const row=document.createElement('div');row.dataset.snippetRow='';row.dataset.snippetId=item.id;row.dataset.favorite=item.favorite?'1':'0';row.dataset.created=itemUnix(item.createdAt);row.dataset.modified=itemUnix(item.modifiedAt);row.dataset.title=item.filename||'';row.className='bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative';
+            const heading=document.createElement('div');heading.className='flex items-start justify-between gap-2 mb-2';const title=document.createElement('div');title.className='font-semibold text-text break-all min-w-0';title.textContent=item.filename||'';heading.appendChild(title);
+            const actions=document.createElement('div');actions.className='flex items-center gap-0 sm:gap-1 flex-shrink-0';actions.append(actionButton('fas fa-i-cursor','重命名',()=>showRenameModal(item.id,item.filename)),actionButton('fas fa-pen','编辑',()=>showEditForm(item.id,item.filename)),actionButton('fas fa-copy','复制',button=>copyToClipboard(item.content||'',button)),actionButton('fas fa-trash','删除',button=>deleteItem(item.id,button)));heading.appendChild(actions);
+            const content=document.createElement('div');content.dataset.snippetContent='';content.className='w-full whitespace-pre-wrap break-all text-subtext0';const full=document.createElement('div');full.dataset.snippetFull='';full.className='hidden';full.textContent=item.content||'';
+            const favorite=document.createElement('button');favorite.className=`absolute right-3 bottom-2 w-8 h-8 flex items-center justify-center hover:bg-surface0 ${item.favorite?'text-yellow':'text-overlay1'} rounded-full transition-colors`;favorite.title=item.favorite?'取消收藏':'收藏';favorite.innerHTML=`<i class="${item.favorite?'fas':'far'} fa-star"></i>`;favorite.onclick=event=>{event.stopPropagation();toggleFavorite(item.id,favorite);};row.append(heading,content,full,favorite);return row;
+        }
+        function createLinkCard(item){
+            const row=document.createElement('div');row.dataset.linkRow='';row.dataset.linkId=item.id;row.dataset.created=itemUnix(item.createdAt);row.dataset.modified=itemUnix(item.modifiedAt);row.dataset.title=item.filename||'';row.className='link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300';
+            const info=document.createElement('div');info.className='min-w-0 flex-1';const title=document.createElement('div');title.className='link-card-name font-semibold text-text mb-1';title.title=item.filename||'';title.textContent=item.filename||'';const url=document.createElement('div');url.dataset.linkUrl='';url.className='text-subtext0 break-all';url.textContent=item.content||'';info.append(title,url);
+            const actions=document.createElement('div');actions.className='link-card-actions flex items-center gap-0 sm:gap-1 flex-shrink-0';actions.append(actionButton('fas fa-i-cursor','重命名',()=>showRenameModal(item.id,item.filename)));const open=document.createElement('a');open.href=item.content||'';open.target='_blank';open.rel='noopener noreferrer';open.title='在新标签页打开';open.className='w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline';open.innerHTML='<i class="fas fa-arrow-up-right-from-square"></i>';actions.append(open,actionButton('fas fa-copy','复制',button=>copyToClipboard(item.content||'',button)),actionButton('fas fa-trash','删除',button=>deleteItem(item.id,button)));row.append(info,actions);return row;
+        }
         async function insertRenderedCard(item) {
             if (!item || !item.type) throw new Error('服务器未返回新卡片');
-            const response = await fetch('/', {cache:'no-store'});
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
-            let source, target;
-            if (item.type === 'text') {
-                source = Array.from(doc.querySelectorAll('[data-snippet-row]')).find(row => row.dataset.snippetId === item.id);
-                target = document.getElementById('snippets-list');
-            } else if (item.type === 'link') {
-                source = Array.from(doc.querySelectorAll('[data-link-row]')).find(row => row.dataset.linkId === item.id);
-                target = document.getElementById('links-list');
-            }
-            if (!source || !target) throw new Error('无法定位服务端生成的卡片');
+            const target=document.getElementById(item.type==='text'?'snippets-list':'links-list');
+            if(!target||(item.type!=='text'&&item.type!=='link'))throw new Error('不支持的卡片类型');
             const duplicate = Array.from(target.querySelectorAll(item.type === 'text' ? '[data-snippet-row]' : '[data-link-row]')).some(row => (item.type === 'text' ? row.dataset.snippetId : row.dataset.linkId) === item.id);
             if (!duplicate) {
-                const card = document.importNode(source, true);
+                const card=item.type==='text'?createSnippetCard(item):createLinkCard(item);
                 target.prepend(card);
                 animateCardIn(card);
             }
@@ -926,7 +930,7 @@
         async function submitNewCard(form, onSuccess) {
             localMutationInFlight++;
             try {
-                const response = await fetch('/submit', {method:'POST', headers:{'Accept':'application/json'}, body:new FormData(form)});
+                const response = await fetch('/submit', {method:'POST', headers:{'Accept':'application/json','Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'}, body:new URLSearchParams(new FormData(form))});
                 if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
                 const result = await response.json();
                 await insertRenderedCard(result.item);

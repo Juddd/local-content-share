@@ -34,6 +34,22 @@ func TestIndexTemplateRendersDocument(t *testing.T) {
 	}
 }
 
+func TestIndexUsesLocalStructuredCardInsertion(t *testing.T) {
+	raw, err := content.ReadFile("templates/index.html")
+	if err != nil { t.Fatal(err) }
+	source := string(raw)
+	for _, label := range []string{">文字<", ">文件<", ">链接<", ">新增<", ">记事本<"} {
+		if !strings.Contains(source, label) { t.Fatalf("missing Chinese label %s", label) }
+	}
+	start := strings.Index(source, "async function insertRenderedCard(item)")
+	if start < 0 { t.Fatal("card insertion function not found") }
+	end := strings.Index(source[start:], "async function submitNewCard")
+	if end < 0 { t.Fatal("card submit function not found") }
+	insert := source[start:start+end]
+	if strings.Contains(insert, "fetch(") { t.Fatal("structured card insertion must not fetch the full page") }
+	if !strings.Contains(insert, "createSnippetCard(item)") { t.Fatal("structured snippet card builder is not used") }
+}
+
 func TestPublicDownloadURLRejectsPrivateAddresses(t *testing.T) {
 	for _, raw := range []string{"http://127.0.0.1/file", "http://localhost/file", "http://192.168.1.10/file"} {
 		if _, err := publicDownloadURL(raw); err == nil {
