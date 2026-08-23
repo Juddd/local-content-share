@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 <div align="center">
   <img src="assets/logo.svg" alt="Local Content Share 标志" width="200">
   <h1>Local Content Share（个人增强版）</h1>
@@ -85,6 +86,8 @@ docker build -t local-content-share .
 
 ## 使用说明
 
+Android 客户端源码和独立构建说明位于 [Juddd/local-content-share-android](https://github.com/Juddd/local-content-share-android)，Release 提供使用原生产证书签名、可覆盖升级的 APK。
+
 ### 稳定 ID 与并发写入
 
 `/api/v1/items` 和结构化 SSE 事件中的 `id` 是永久 UUID，`storageId` 是当前物理路径，`revision` 是递增修订号。重命名只修改 `storageId`，不会改变 `id`。
@@ -121,6 +124,16 @@ docker build -t local-content-share .
 - 复制按钮复制 URL
 - 旧版链接会继续兼容，并可通过重命名补充标题
 
+### 设备中心与远程锁定
+
+Android App 的“设置 → 设备中心”会列出打开过网页的浏览器设备，并显示在线/后台/离线状态、IP、页面数量和最后活动时间。设备可以单独重命名，也可以远程“关闭并锁定”或解除锁定。
+
+浏览器身份由服务端随机生成，保存在同一浏览器配置文件共享的长期 HttpOnly Cookie 中，不使用浏览器指纹。Chrome 与 Firefox、普通与无痕窗口、清理 Cookie 后都会被视为不同设备。
+
+锁定时网页会先尝试 `window.close()`；浏览器不允许关闭普通标签页时，服务端改为返回真正的 HTTP 404。刷新、重新输入网址和同一浏览器配置文件中新开的标签页仍会保持 404，直到 App 解除锁定。设备名称与锁定状态保存在 `data/devices.json`，服务或 NAS 重启后不会丢失。
+
+当前部署按单用户、可信网络设计，没有登录鉴权；能访问服务 API 的客户端也能调用设备控制接口。如将来对公网开放给不可信用户，应先增加认证。
+
 ### 有效期
 
 创建文字或上传文件时，可以循环选择 `Never`、`1 hour`、`4 hours`、`1 day` 或 `Custom`。自定义值格式为“数字 + 单位”，例如：
@@ -156,6 +169,7 @@ proxy_connect_timeout 3600s;
 - `notepad/`：Markdown 记事本
 - `links.file`：链接
 - `expirations.json`：过期时间
+- `devices.json`：浏览器设备名称与持久锁定状态
 
 请确保容器对挂载的数据目录具有读写权限，并在升级前做好备份。
 

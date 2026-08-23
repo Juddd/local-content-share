@@ -1,0 +1,16 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+# 设备中心与远程锁定
+
+- 新增浏览器设备中心 API，展示在线、后台、离线、IP、页面数量与最后活动时间。
+- 浏览器设备使用服务端生成的随机永久 Cookie，不采集浏览器指纹；同一浏览器配置文件的标签页共享设备身份。
+- 支持设备重命名、远程关闭并锁定和解除锁定。
+- 锁定先持久化到 `data/devices.json`，再向该设备所有标签页发送定向 SSE 命令。
+- 浏览器不允许 `window.close()` 时返回真实 HTTP 404；刷新、重新访问和同配置文件的新标签页继续显示 404，直至 App 解除锁定。
+- 设备命令使用独立 SSE，不占用内容事件的连续序号。
+- Android 1.0.63 新增“设备中心”界面，并继续使用原生产证书签名，可覆盖升级。
+
+## Android APK
+
+- 文件：`content-transfer-v1.0.63.apk`
+- SHA-256：`4c384dbba628b296d05150f67d35a58aa15faffecbea23d3c45fff2e1f929f8d`
+- 签名证书 SHA-256：`eeb5f73e5406571546fd293d1979edee9dc8d9a2b74dd3cfc09fa6609a701f9b`

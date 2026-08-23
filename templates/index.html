@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 {{define "section-sort"}}
 <div class="relative section-sort" data-list="{{.}}">
     <button type="button" class="section-sort-button flex items-center gap-2 px-3 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors" title="排序"><i class="fas fa-arrow-down-wide-short text-subtext0"></i><span class="section-sort-text font-medium text-sm text-subtext0">创建时间 ↓</span></button>
@@ -1073,6 +1074,106 @@
             }).catch(error=>{controller.abort();activeTransfer=null;if(error.name!=='AbortError')progressStatus.textContent=`下载失败：${error.message}`;});
         });
 
+        // Browser device presence and device-scoped remote lock commands use a
+        // separate channel from content events so they never consume content
+        // sequence numbers.
+        const deviceSessionId = (() => {
+            if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+            const bytes = new Uint8Array(24);
+            crypto.getRandomValues(bytes);
+            return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+        })();
+        const browserDeviceInfo = (() => {
+            const ua = navigator.userAgent || '';
+            let platform = navigator.userAgentData?.platform || navigator.platform || '未知系统';
+            if (/Android/i.test(ua)) platform = 'Android';
+            else if (/iPhone|iPad|iPod/i.test(ua)) platform = 'iOS';
+            else if (/Windows/i.test(ua)) platform = 'Windows';
+            else if (/Macintosh|Mac OS X/i.test(ua)) platform = 'macOS';
+            else if (/Linux/i.test(ua)) platform = 'Linux';
+            let browser = '浏览器';
+            if (/Edg\//.test(ua)) browser = 'Edge';
+            else if (/OPR\//.test(ua)) browser = 'Opera';
+            else if (/Firefox\//.test(ua)) browser = 'Firefox';
+            else if (/CriOS\//.test(ua)) browser = 'Chrome';
+            else if (/Chrome\//.test(ua)) browser = 'Chrome';
+            else if (/Safari\//.test(ua)) browser = 'Safari';
+            return {platform, browser};
+        })();
+        let deviceEvents;
+        let deviceHeartbeatBusy = false;
+        let deviceActivityPending = true;
+        let lastDeviceActivitySend = 0;
+        let deviceLocking = false;
+
+        function enterDeviceLock() {
+            if (deviceLocking) return;
+            deviceLocking = true;
+            if (deviceEvents) deviceEvents.close();
+            // Normal user-opened tabs usually reject window.close(). Schedule
+            // the server-gated navigation first so rejection always becomes 404.
+            setTimeout(() => location.replace('/'), 180);
+            try { window.close(); } catch (_) {}
+        }
+
+        async function sendDeviceHeartbeat(options = {}) {
+            if (deviceHeartbeatBusy && !options.gone) return;
+            deviceHeartbeatBusy = !options.gone;
+            const active = options.active === true || deviceActivityPending;
+            if (active) {
+                deviceActivityPending = false;
+                lastDeviceActivitySend = Date.now();
+            }
+            try {
+                const response = await fetch('/api/v1/device/heartbeat', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    keepalive: options.gone === true,
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        sessionId: deviceSessionId,
+                        platform: browserDeviceInfo.platform,
+                        browser: browserDeviceInfo.browser,
+                        visible: options.gone ? false : !document.hidden,
+                        active,
+                        gone: options.gone === true
+                    })
+                });
+                if (response.ok && !options.gone) {
+                    const result = await response.json();
+                    if (result.locked) enterDeviceLock();
+                }
+            } catch (_) {
+                // The next interval or visibility change retries automatically.
+            } finally {
+                if (!options.gone) deviceHeartbeatBusy = false;
+            }
+        }
+
+        function connectDeviceEvents() {
+            if (deviceLocking) return;
+            if (deviceEvents) deviceEvents.close();
+            deviceEvents = new EventSource(`/api/v1/device/events?sessionId=${encodeURIComponent(deviceSessionId)}`);
+            deviceEvents.onmessage = event => {
+                try {
+                    if (JSON.parse(event.data).type === 'lock') enterDeviceLock();
+                } catch (_) {}
+            };
+            deviceEvents.onerror = () => {
+                deviceEvents.close();
+                setTimeout(() => { if (!deviceLocking) connectDeviceEvents(); }, 2500);
+            };
+        }
+
+        function noteDeviceActivity() {
+            deviceActivityPending = true;
+            if (Date.now() - lastDeviceActivitySend > 5000) sendDeviceHeartbeat({active: true});
+        }
+        ['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(type =>
+            window.addEventListener(type, noteDeviceActivity, {passive: true})
+        );
+
         // SSE for live updates
         let evtSource;
         let lastEventSequence = null;
@@ -1135,13 +1236,18 @@
         // SSE connect aftwr page load
         window.addEventListener('load', function() {
             connectSSE();
+            sendDeviceHeartbeat({active: true});
+            connectDeviceEvents();
+            setInterval(() => sendDeviceHeartbeat(), 10000);
         });
         document.addEventListener('visibilitychange', function() {
+            sendDeviceHeartbeat({active: !document.hidden});
             if (!document.hidden && (!evtSource || evtSource.readyState === EventSource.CLOSED)) {
                 console.log("Reconnecting SSE, tab visible");
                 connectSSE();
             }
         });
+        window.addEventListener('pagehide', () => sendDeviceHeartbeat({gone: true}));
     </script>
 </body>
 </html>

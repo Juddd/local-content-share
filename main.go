@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 package main
 
 import (
@@ -952,6 +953,7 @@ func main() {
 	if err := os.MkdirAll(filepath.Join("data", "notepad"), 0755); err != nil {
 		log.Fatal(err)
 	}
+	browserDevices := newDeviceStore(filepath.Join("data", "devices.json"))
 	log.Println("Data directory created/reused without errors.")
 	createFileIfNotExists("notepad/md.file", mdPlaceholder)
 	createFileIfNotExists("links.file", "")
@@ -1005,6 +1007,7 @@ func main() {
 		},
 	}
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(content, "templates/*.html"))
+	registerDeviceHandlers(http.DefaultServeMux, browserDevices)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		clientMux.Lock()
@@ -2034,7 +2037,8 @@ func main() {
 	http.HandleFunc("/api/updates", handleContentUpdates)
 
 	// Start server
-	server := &http.Server{Addr: *listenAddress, Handler: idempotencyMiddleware(http.DefaultServeMux), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
+	appHandler := browserDevices.gateMiddleware(browserDevices.identityMiddleware(idempotencyMiddleware(http.DefaultServeMux)))
+	server := &http.Server{Addr: *listenAddress, Handler: appHandler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
 	log.Fatal(server.ListenAndServe())
 }
 
