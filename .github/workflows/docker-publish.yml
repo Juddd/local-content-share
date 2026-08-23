@@ -6,7 +6,7 @@ on:
     branches:
       - main
     tags:
-      - v40.1
+      - v40.2
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -18,7 +18,7 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/juddd/local-content-share
-  RELEASE_TAG: v40.1
+  RELEASE_TAG: v40.2
 
 jobs:
   test:
@@ -47,8 +47,17 @@ jobs:
             gh release create "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
               --title "Local Content Share 个人增强版 $RELEASE_TAG" \
-              --notes-file .github/release-notes-v40.1.md
+              --notes-file .github/release-notes-v40.2.md
           fi
+      - name: Attach signed Android APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --location --retry 3 \
+            -o content-transfer-v1.0.54.apk \
+            http://nas.yode.ink:8084/download/files/content-transfer-v1.0.54.apk
+          echo "3428141db4d7feaeff6c74b4f6cc19d68b540c742279843e8aa75869f024629d  content-transfer-v1.0.54.apk" | sha256sum --check
+          gh release upload "$RELEASE_TAG" content-transfer-v1.0.54.apk --clobber
 
   publish-image:
     needs: test
