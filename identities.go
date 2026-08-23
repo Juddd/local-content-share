@@ -29,6 +29,7 @@ type IdentityStore struct {
 
 var identities *IdentityStore
 var errRevisionConflict = errors.New("revision conflict")
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
 func newIdentityStore(name string) *IdentityStore {
 	s := &IdentityStore{ByID: map[string]*IdentityRecord{}, ByStore: map[string]string{}, path: name}
@@ -78,7 +79,7 @@ func (s *IdentityStore) EnsureWithID(storage, preferred string) IdentityRecord {
 			return *r
 		}
 	}
-	if !regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`).MatchString(preferred) || s.ByID[preferred] != nil {
+	if !uuidPattern.MatchString(preferred) || s.ByID[preferred] != nil {
 		preferred = newUUID()
 	}
 	r := &IdentityRecord{ID: preferred, Storage: storage, Revision: 1}
@@ -86,6 +87,30 @@ func (s *IdentityStore) EnsureWithID(storage, preferred string) IdentityRecord {
 	_ = s.saveLocked()
 	return *r
 }
+
+func (s *IdentityStore) MigrateStorage(oldStorage, newStorage string) {
+	if oldStorage == newStorage {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	oldID, newID := s.ByStore[oldStorage], s.ByStore[newStorage]
+	if oldID == "" {
+		return
+	}
+	delete(s.ByStore, oldStorage)
+	if newID != "" {
+		if oldID != newID {
+			delete(s.ByID, oldID)
+		}
+	} else if r := s.ByID[oldID]; r != nil {
+		r.Storage = newStorage
+		s.ByStore[newStorage] = oldID
+	}
+	_ = s.saveLocked()
+}
+
+func isStableUUID(value string) bool { return uuidPattern.MatchString(value) }
 
 func (s *IdentityStore) Resolve(value string) (IdentityRecord, bool) {
 	s.mu.Lock()

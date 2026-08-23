@@ -50,3 +50,16 @@ func TestIdentityAcceptsClientGeneratedUUID(t *testing.T) {
 		t.Fatal("client identity was not stable")
 	}
 }
+
+func TestIdentityMigratesLegacyLinkStorageWithoutChangingID(t *testing.T) {
+	s := newIdentityStore(filepath.Join(t.TempDir(), "identities.json"))
+	old := s.Ensure("link/Title%09https:%2F%2Fexample.com")
+	s.MigrateStorage("link/Title%09https:%2F%2Fexample.com", "link/Title\thttps://example.com")
+	got, ok := s.Resolve("link/Title\thttps://example.com")
+	if !ok || got.ID != old.ID {
+		t.Fatalf("link identity changed: %#v", got)
+	}
+	if _, ok := s.Resolve("link/Title%09https:%2F%2Fexample.com"); ok {
+		t.Fatal("legacy link storage remains")
+	}
+}

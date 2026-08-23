@@ -960,6 +960,14 @@ func main() {
 	expirationTracker = initExpirationTracker()
 	itemTimeTracker = initItemTimeTracker()
 	identities = newIdentityStore(filepath.Join("data", "identities.json"))
+	if links, err := os.ReadFile(filepath.Join("data", "links.file")); err == nil {
+		for _, stored := range strings.Split(strings.TrimSpace(string(links)), "\n") {
+			stored = strings.TrimSpace(stored)
+			if stored != "" {
+				identities.MigrateStorage("link/"+url.PathEscape(stored), "link/"+stored)
+			}
+		}
+	}
 	mutations = newMutationCache(filepath.Join("data", "mutation-results.json"))
 	customExpiry := os.Getenv("DEFAULT_EXPIRY")
 	if customExpiry != "" {
@@ -1079,7 +1087,7 @@ func main() {
 				}
 				itemTimes := itemTimeTracker.Get("link/"+storedLine, fallback)
 				entries = append(entries, Entry{
-					ID:         "link/" + url.PathEscape(storedLine),
+					ID:         "link/" + storedLine,
 					Type:       "link",
 					Content:    linkURL,
 					Filename:   linkTitle,
@@ -1160,7 +1168,7 @@ func main() {
 					fallback = linksInfo.ModTime().Add(time.Duration(index-len(lines)) * time.Second)
 				}
 				times := itemTimeTracker.Get("link/"+stored, fallback)
-				entries = append(entries, Entry{ID: "link/" + url.PathEscape(stored), Type: "link", Content: linkURL, Filename: title, CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt})
+				entries = append(entries, Entry{ID: "link/" + stored, Type: "link", Content: linkURL, Filename: title, CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt})
 			}
 		}
 		for i := range entries {
@@ -1840,6 +1848,10 @@ func main() {
 		}
 		requestedID := strings.TrimPrefix(r.URL.Path, "/delete/")
 		id := resolveStorageID(requestedID)
+		if id == requestedID && isStableUUID(requestedID) {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "already_deleted"})
+			return
+		}
 		if record, ok := identities.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
 			writeRevisionConflict(w, record)
 			return
@@ -1891,6 +1903,11 @@ func main() {
 			return
 		}
 		err := os.Remove(filePath)
+		if os.IsNotExist(err) {
+			record, _ := identities.Delete(requestedID, 0)
+			writeJSON(w, http.StatusOK, map[string]any{"status": "already_deleted", "id": record.ID})
+			return
+		}
 		if err != nil {
 			log.Printf("Failed to delete %s: %v", id, err)
 			http.Error(w, "Failed to delete file", http.StatusInternalServerError)
