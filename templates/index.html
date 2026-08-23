@@ -235,7 +235,7 @@
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">Snippets</h2>{{template "section-sort" "snippets-list"}}</div>
                 <div id="snippets-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "text"}}
-                    <div data-snippet-row data-snippet-id="{{.ID}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
+                    <div data-snippet-row data-snippet-id="{{.ID}}" data-favorite="{{if .Favorite}}1{{else}}0{{end}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
                         <div class="flex items-start justify-between gap-2 mb-2">
                             <div class="font-semibold text-text break-all min-w-0">{{.Filename}}</div>
                             <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
@@ -247,6 +247,7 @@
                         </div>
                         <div data-snippet-content class="w-full whitespace-pre-wrap break-all text-subtext0">{{previewText .Content 600}}{{if isTruncated .Content 600}}… <span class="text-blue text-sm whitespace-nowrap">点击查看全文</span>{{end}}</div>
                         <div data-snippet-full class="hidden">{{.Content}}</div>
+                        <button onclick="event.stopPropagation(); toggleFavorite('{{.ID}}', this)" class="absolute right-3 bottom-2 w-8 h-8 flex items-center justify-center hover:bg-surface0 {{if .Favorite}}text-yellow{{else}}text-overlay1{{end}} rounded-full transition-colors" title="{{if .Favorite}}取消收藏{{else}}收藏{{end}}"><i class="{{if .Favorite}}fas{{else}}far{{end}} fa-star"></i></button>
                     </div>
                     {{end}}{{end}}
                 </div>
@@ -346,7 +347,7 @@
                         <span id="expiry-text" class="font-medium text-sm text-subtext0">永不过期</span>
                     </button>
                     <button type="button" id="cancel-button" class="py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium text-sm">取消</button>
-                    <button type="submit" class="py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors text-sm">提交</button>
+                    <button type="submit" id="new-item-submit" class="py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors text-sm">提交</button>
                 </div>
             </form>
         </div>
@@ -501,6 +502,7 @@
             const fileNameDisplay = document.getElementById('file-name-display');
             newItemModal.classList.add('hidden');
             form.action = '/submit';
+            document.getElementById('new-item-submit').textContent = '提交';
             form.reset();
             form.querySelector('[name="name"]').disabled = false;
             fileInput.parentElement.parentElement.style.display = 'block';
@@ -624,6 +626,19 @@
             }
         });
 
+        const sortLabels = { created: '创建时间', modified: '修改时间', title: '标题字典序', size: '文件大小' };
+        function applyListSort(listId, animate=false) {
+            const list=document.getElementById(listId);if(!list)return;
+            let state;try{state=JSON.parse(localStorage.getItem(`contentSort:${listId}`));}catch(_){}
+            if(!state||!sortLabels[state.key])state={key:'created',direction:'desc'};
+            const before=animate?new Map(Array.from(list.children).map(row=>[row,row.getBoundingClientRect()])):null;
+            const items=Array.from(list.children).sort((a,b)=>{if(listId==='snippets-list'){const f=Number(b.dataset.favorite||0)-Number(a.dataset.favorite||0);if(f)return f;}const r=state.key==='title'?(a.dataset.title||'').localeCompare(b.dataset.title||'','zh-CN',{numeric:true,sensitivity:'base'}):Number(a.dataset[state.key]||0)-Number(b.dataset[state.key]||0);return state.direction==='asc'?r:-r;});
+            items.forEach(row=>list.appendChild(row));
+            const label=document.querySelector(`.section-sort[data-list="${listId}"] .section-sort-text`);if(label)label.textContent=`${sortLabels[state.key]} ${state.direction==='asc'?'↑':'↓'}`;
+            if(before)items.forEach(row=>{const old=before.get(row),now=row.getBoundingClientRect();if(old&&Math.abs(old.top-now.top)>1)row.animate([{transform:`translateY(${old.top-now.top}px)`,opacity:.7},{transform:'translateY(0)',opacity:1}],{duration:230,easing:'ease-out'});});
+        }
+        function initializeSortControls(){document.querySelectorAll('.section-sort').forEach(sortControl=>{if(sortControl.dataset.initialized==='1')return;sortControl.dataset.initialized='1';const listId=sortControl.dataset.list,button=sortControl.querySelector('.section-sort-button'),menu=sortControl.querySelector('.section-sort-menu');button.addEventListener('click',event=>{event.stopPropagation();document.querySelectorAll('.section-sort-menu').forEach(other=>{if(other!==menu)other.classList.add('hidden');});menu.classList.toggle('hidden');});menu.querySelectorAll('.sort-option').forEach(option=>option.addEventListener('click',event=>{event.stopPropagation();let state;try{state=JSON.parse(localStorage.getItem(`contentSort:${listId}`));}catch(_){}if(!state||!sortLabels[state.key])state={key:'created',direction:'desc'};const key=option.dataset.sort;state=state.key===key?{key,direction:state.direction==='asc'?'desc':'asc'}:{key,direction:key==='title'?'asc':'desc'};localStorage.setItem(`contentSort:${listId}`,JSON.stringify(state));menu.classList.add('hidden');applyListSort(listId,true);}));applyListSort(listId);});}
+
         // Fetch expiry options and show the newest entries first in every section
         document.addEventListener('DOMContentLoaded', function() {
             fetch('/getExpiryOptions').then(response => response.json()).then(options => {
@@ -633,7 +648,6 @@
                     expiryValueInput.value = expiryOptions[0];
                 }
             }).catch(error => console.error('Error fetching expiry options:', error));
-            const labels = { created: '创建时间', modified: '修改时间', title: '标题字典序', size: '文件大小' };
             document.querySelectorAll('.section-sort').forEach(sortControl => {
                 const listId = sortControl.dataset.list;
                 const list = document.getElementById(listId);
@@ -643,11 +657,15 @@
                 const storageKey = `contentSort:${listId}`;
                 let state;
                 try { state = JSON.parse(localStorage.getItem(storageKey)); } catch (_) {}
-                if (!state || !labels[state.key]) state = { key: 'created', direction: 'desc' };
+                if (!state || !sortLabels[state.key]) state = { key: 'created', direction: 'desc' };
 
                 function applySort() {
                     const items = Array.from(list.children);
                     items.sort((a, b) => {
+                        if (listId === 'snippets-list') {
+                            const favoriteOrder = Number(b.dataset.favorite || 0) - Number(a.dataset.favorite || 0);
+                            if (favoriteOrder) return favoriteOrder;
+                        }
                         let result;
                         if (state.key === 'title') {
                             result = a.dataset.title.localeCompare(b.dataset.title, 'zh-CN', { numeric: true, sensitivity: 'base' });
@@ -657,7 +675,7 @@
                         return state.direction === 'asc' ? result : -result;
                     });
                     items.forEach(item => list.appendChild(item));
-                    text.textContent = `${labels[state.key]} ${state.direction === 'asc' ? '↑' : '↓'}`;
+                    text.textContent = `${sortLabels[state.key]} ${state.direction === 'asc' ? '↑' : '↓'}`;
                     localStorage.setItem(storageKey, JSON.stringify(state));
                 }
 
@@ -709,6 +727,7 @@
             const content = await response.text();
             const form = document.getElementById('new-item-form');
             form.action = `/edit/${id}`;
+            document.getElementById('new-item-submit').textContent = '保存';
             form.querySelector('[name="name"]').value = filename;
             form.querySelector('[name="name"]').disabled = true; 
             form.querySelector('[name="content"]').value = content;
@@ -836,6 +855,17 @@
             .finally(() => { setTimeout(() => { localMutationInFlight = Math.max(0, localMutationInFlight - 1); }, 800); });
         }
 
+        async function toggleFavorite(id, button) {
+            const row=button.closest('[data-snippet-row]'); button.disabled=true; localMutationInFlight++;
+            try {
+                const desired=row.dataset.favorite!=='1';
+                const response=await fetch(`/favorite/${id}`,{method:'POST',headers:{'Accept':'application/json'},body:new URLSearchParams({favorite:String(desired)})});
+                if(!response.ok)throw new Error(await response.text()||`HTTP ${response.status}`);
+                const result=await response.json(); row.remove(); await insertRenderedCard(result.item); applyListSort('snippets-list',true);
+            } catch(error) { alert(`收藏操作失败：${error.message}`); }
+            finally { button.disabled=false;setTimeout(()=>{localMutationInFlight=Math.max(0,localMutationInFlight-1);},800); }
+        }
+
         // View Snippet Modal Logic
         const viewSnippetModal = document.getElementById('view-snippet-modal');
         const viewModalBackdrop = document.getElementById('view-modal-backdrop');
@@ -867,7 +897,7 @@
 
         // New form submission with progress
         const newItemForm = document.getElementById('new-item-form');
-        async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const snapshot=Number(response.headers.get('X-Content-Sequence'));const html=await response.text();if(Number.isFinite(snapshot)&&lastEventSequence!==null&&lastEventSequence>snapshot){setTimeout(()=>refreshContentSections().catch(()=>{}),150);return;}const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});if(Number.isFinite(snapshot))lastEventSequence=Math.max(lastEventSequence??-1,snapshot);renderSnippetPreviews();}
+        async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const snapshot=Number(response.headers.get('X-Content-Sequence'));const html=await response.text();if(Number.isFinite(snapshot)&&lastEventSequence!==null&&lastEventSequence>snapshot){setTimeout(()=>refreshContentSections().catch(()=>{}),150);return;}const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});if(Number.isFinite(snapshot))lastEventSequence=Math.max(lastEventSequence??-1,snapshot);initializeSortControls();renderSnippetPreviews();}
 
         async function insertRenderedCard(item) {
             if (!item || !item.type) throw new Error('服务器未返回新卡片');
@@ -889,6 +919,7 @@
                 target.prepend(card);
                 animateCardIn(card);
             }
+            applyListSort(item.type==='text'?'snippets-list':'links-list',true);
             renderSnippetPreviews();
         }
 
@@ -966,8 +997,10 @@
             if (!isFileUpload && isTextSubmission) {
                 const submit = this.querySelector('[type="submit"]');
                 submit.disabled = true;
-                submitNewCard(this, closeAndResetNewItemModal)
-                    .catch(error => alert(`新增 Snippet 失败：${error.message}`))
+                const editing = this.action.includes('/edit/');
+                const request = editing ? (async()=>{localMutationInFlight++;try{const response=await fetch(this.action,{method:'POST',headers:{'Accept':'application/json'},body:new FormData(this)});if(!response.ok)throw new Error(await response.text()||`HTTP ${response.status}`);const result=await response.json();const old=eventCard(result.item.id);if(old)old.remove();await insertRenderedCard(result.item);closeAndResetNewItemModal();}finally{setTimeout(()=>{localMutationInFlight=Math.max(0,localMutationInFlight-1);},800);}})() : submitNewCard(this, closeAndResetNewItemModal);
+                request
+                    .catch(error => alert(`${editing?'保存':'新增'} Snippet 失败：${error.message}`))
                     .finally(() => { submit.disabled = false; });
                 return;
             }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"html/template"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -15,6 +16,23 @@ import (
 	"testing"
 	"time"
 )
+
+func TestIndexTemplateRendersDocument(t *testing.T) {
+	tmpl, err := template.New("").Funcs(template.FuncMap{
+		"previewText": func(s string, max int) string { return s },
+		"isTruncated": func(s string, max int) bool { return false },
+	}).ParseFS(content, "templates/*.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err = tmpl.ExecuteTemplate(&output, "index.html", []Entry{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "<!DOCTYPE html>") {
+		t.Fatalf("index template rendered %d bytes without a document", output.Len())
+	}
+}
 
 func TestPublicDownloadURLRejectsPrivateAddresses(t *testing.T) {
 	for _, raw := range []string{"http://127.0.0.1/file", "http://localhost/file", "http://192.168.1.10/file"} {

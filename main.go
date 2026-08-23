@@ -43,7 +43,10 @@ type Entry struct {
 	CreatedAt  time.Time `json:"createdAt"`
 	ModifiedAt time.Time `json:"modifiedAt"`
 	Size       int64     `json:"size"`
+	Favorite   bool      `json:"favorite,omitempty"`
 }
+
+var favorites = newFavoriteStore(filepath.Join("data", "favorites.json"))
 
 type DownloadTask struct {
 	ID       string `json:"id"`
@@ -737,7 +740,7 @@ func contentEntry(id string) (*Entry, error) {
 			return nil, err
 		}
 		times := itemTimeTracker.Get(id, info.ModTime())
-		return &Entry{ID: id, Type: "text", Filename: filepath.Base(id), Content: string(body), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size()}, nil
+		return &Entry{ID: id, Type: "text", Filename: filepath.Base(id), Content: string(body), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size(), Favorite: favorites.Is(id)}, nil
 	}
 	return nil, fmt.Errorf("unsupported content id")
 }
@@ -984,6 +987,7 @@ func main() {
 				Filename:   file.Name(),
 				CreatedAt:  itemTimes.CreatedAt,
 				ModifiedAt: itemTimes.ModifiedAt,
+				Favorite:   favorites.Is(id),
 			})
 		}
 		// Read files
@@ -1075,7 +1079,7 @@ func main() {
 			}
 			id := filepath.Join("text", file.Name())
 			times := itemTimeTracker.Get(id, info.ModTime())
-			entries = append(entries, Entry{ID: id, Type: "text", Content: string(data), Filename: file.Name(), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt})
+			entries = append(entries, Entry{ID: id, Type: "text", Content: string(data), Filename: file.Name(), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Favorite: favorites.Is(id)})
 		}
 		files, _ := os.ReadDir(filepath.Join("data", "files"))
 		for _, file := range files {
@@ -1636,6 +1640,7 @@ func main() {
 		}
 		expirationTracker.mu.Unlock()
 		itemTimeTracker.Rename(oldPath, newID)
+		_ = favorites.Rename(oldPath, newID)
 		if entry, entryErr := contentEntry(newID); entryErr == nil {
 			notifyContentRename(oldPath, entry)
 		} else {
@@ -1805,6 +1810,7 @@ func main() {
 			_ = os.Remove(thumbnailPath(id))
 		}
 		itemTimeTracker.Delete(id)
+		_ = favorites.Delete(id)
 		expirationTracker.mu.Lock()
 		delete(expirationTracker.Expirations, id)
 		expirationTracker.saveToFile()
@@ -1814,6 +1820,39 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status": "ok"}`))
 		log.Printf("Deleted %s\n", id)
+	})
+
+	http.HandleFunc("/favorite/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/favorite/")
+		if _, err := contentFilePath(id, "text"); err != nil {
+			http.Error(w, "Can only favorite text snippets", http.StatusBadRequest)
+			return
+		}
+		if _, err := os.Stat(filepath.Join("data", filepath.FromSlash(id))); err != nil {
+			http.Error(w, "Snippet not found", http.StatusNotFound)
+			return
+		}
+		raw := r.FormValue("favorite")
+		if raw != "true" && raw != "false" && raw != "1" && raw != "0" {
+			http.Error(w, "favorite must be true or false", http.StatusBadRequest)
+			return
+		}
+		value := raw == "true" || raw == "1"
+		if err := favorites.Set(id, value); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		entry, err := contentEntry(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		notifyContentItem("updated", entry)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "item": entry})
 	})
 
 	http.HandleFunc("/edit/", func(w http.ResponseWriter, r *http.Request) {
@@ -1844,6 +1883,10 @@ func main() {
 		itemTimeTracker.Touch(id)
 		if entry, entryErr := contentEntry(id); entryErr == nil {
 			notifyContentItem("updated", entry)
+			if strings.Contains(r.Header.Get("Accept"), "application/json") {
+				writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "item": entry})
+				return
+			}
 		} else {
 			notifyContentChange()
 		}
