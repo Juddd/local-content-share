@@ -2,14 +2,12 @@
 const markdownEditor = document.getElementById('markdown-editor');
 const markdownPreview = document.getElementById('markdown-preview');
 const toggleModeBtn = document.getElementById('toggle-mode');
-const editorContainer = document.getElementById('editor-container');
 
 // State Variables
 let undoStack = [];
 let redoStack = [];
 let lastChange = '';
 let isReaderMode = false;
-let lastSaveTime = Date.now();
 let saveTimeout = null;
 let isDirty = false;
 
@@ -83,7 +81,6 @@ function saveContent() {
     if (!response.ok) {
       throw new Error('Network response was not ok');
     }
-    lastSaveTime = Date.now();
     isDirty = false;
     console.log('Content saved successfully');
   })

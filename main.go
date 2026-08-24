@@ -1282,7 +1282,7 @@ func main() {
 		switch r.Method {
 		case "GET":
 			filename := strings.TrimPrefix(r.URL.Path, "/notepad/")
-			if filename != "md.file" { // && filename != "rtext.file" {
+			if filename != "md.file" {
 				http.Error(w, "Invalid notepad file", http.StatusBadRequest)
 				return
 			}
@@ -1297,7 +1297,7 @@ func main() {
 			return
 		case "POST":
 			filename := strings.TrimPrefix(r.URL.Path, "/notepad/")
-			if filename != "md.file" { // && filename != "rtext.file" {
+			if filename != "md.file" {
 				http.Error(w, "Invalid notepad file", http.StatusBadRequest)
 				return
 			}

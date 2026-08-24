@@ -238,7 +238,8 @@ func TestDeviceRetentionCleanup(t *testing.T) {
 
 	oldID, _ := randomDeviceID()
 	recentID, _ := randomDeviceID()
-	activeID, _ := randomDeviceID()
+	activewarning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+ID, _ := randomDeviceID()
 	store.devices[oldID] = &BrowserDevice{ID: oldID, CreatedAt: now.Add(-40 * 24 * time.Hour), LastSeen: now.Add(-31 * 24 * time.Hour)}
 	store.devices[recentID] = &BrowserDevice{ID: recentID, CreatedAt: now.Add(-40 * 24 * time.Hour), LastActivity: now.Add(-29 * 24 * time.Hour)}
 	store.devices[activeID] = &BrowserDevice{ID: activeID, CreatedAt: now.Add(-40 * 24 * time.Hour), LastSeen: now.Add(-31 * 24 * time.Hour)}

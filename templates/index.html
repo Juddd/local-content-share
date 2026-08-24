@@ -266,7 +266,8 @@
 
             <!-- Links Section -->
             <section class="content-section">
-                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">链接</h2>{{template "section-sort" "links-list"}}</div>
+                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold tewarning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
+xt-text">链接</h2>{{template "section-sort" "links-list"}}</div>
                 <div id="links-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "link"}}
                     <div data-link-row data-link-id="{{.ID}}" data-revision="{{.Revision}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
@@ -706,7 +707,7 @@
         renameForm.addEventListener('submit', (e) => {
             e.preventDefault();
             if (!newNameInput.value) return;
-            const id=renameForm.action.split('/rename/')[1]; const row=document.querySelector(`[data-file-row], [data-snippet-row], [data-link-row]`);
+            const id=renameForm.action.split('/rename/')[1];
             const target=eventCard(id);fetch(renameForm.action,{method:'POST',headers:{'Accept':'application/json'},body:new URLSearchParams({newname:newNameInput.value,expectedRevision:target?.dataset.revision||''})}).then(async r=>{if(!r.ok)throw new Error(await r.text()||'HTTP '+r.status);const result=await r.json();if(target)target.remove();await insertRenderedCard(result.item);renameModal.classList.add('hidden');}).catch(e=>alert('重命名失败：'+e.message));
         });
 
@@ -1015,8 +1016,6 @@
             xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
             xhr.upload.onprogress = function(event) {
                 if (event.lengthComputable) {
-                    const percentComplete = (event.loaded / event.total) * 100;
-                    progressBar.style.width = percentComplete + '%';
                     showTransferProgress('正在上传', event.loaded, event.total);
                 }
             };
