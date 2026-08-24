@@ -440,7 +440,7 @@ func (s *deviceStore) list() []deviceView {
 			network = device.NetworkHint
 		}
 		displayIP := device.LastIP
-		if displayIP == "" && network != "" {
+		if (network == "unknown" && (trustedProxyIP(net.ParseIP(displayIP)) || classifyDeviceIP(displayIP) == "unknown")) || (displayIP == "" && network != "") {
 			displayIP = "地址未知"
 		}
 		result = append(result, deviceView{ID: device.ID, Name: device.Name, DisplayName: firstNonEmpty(device.Name, defaultDeviceName(device)), Platform: device.Platform, Browser: device.Browser, Locked: device.Locked, LockedAt: device.LockedAt, CreatedAt: device.CreatedAt, LastSeen: lastSeen, LastActivity: lastActivity, IP: displayIP, Network: network, State: state, Tabs: tabs})
