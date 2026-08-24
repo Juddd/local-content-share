@@ -18,7 +18,6 @@ import (
 	"math/rand"
 	"mime"
 	"mime/multipart"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -48,8 +47,6 @@ type Entry struct {
 	Favorite   bool      `json:"favorite,omitempty"`
 }
 
-var favorites = newFavoriteStore(filepath.Join("data", "favorites.json"))
-
 type DownloadTask struct {
 	ID       string `json:"id"`
 	Status   string `json:"status"`
@@ -67,16 +64,6 @@ type downloadTaskStore struct {
 }
 
 var downloadTasks = downloadTaskStore{tasks: map[string]*DownloadTask{}}
-
-type idempotentUpload struct {
-	Entries []Entry
-	Created time.Time
-}
-
-var uploadResults = struct {
-	sync.Mutex
-	values map[string]idempotentUpload
-}{values: map[string]idempotentUpload{}}
 
 type uploadKeyLock struct {
 	mutex sync.Mutex
@@ -159,8 +146,7 @@ func entryByStorage(storage string) (*Entry, error) {
 		if parts := strings.SplitN(raw, "\t", 2); len(parts) == 2 {
 			title, target = strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 		}
-		times := itemTimeTracker.Get(storage, time.Now())
-		return stableEntry(&Entry{ID: storage, Type: "link", Filename: title, Content: target, CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt}), nil
+		return stableEntry(&Entry{ID: storage, Type: "link", Filename: title, Content: target, CreatedAt: time.Now(), ModifiedAt: time.Now()}), nil
 	}
 	return nil, fmt.Errorf("unsupported content id")
 }
@@ -187,256 +173,12 @@ func contentFilePath(id string, allowedTypes ...string) (string, error) {
 	return filepath.Join("data", parts[0], parts[1]), nil
 }
 
-type ItemTimes struct{ CreatedAt, ModifiedAt time.Time }
-type ItemTimeTracker struct {
-	Items map[string]ItemTimes `json:"items"`
-	mu    sync.Mutex
-}
-
-var itemTimeTracker *ItemTimeTracker
-
 const thumbnailDir = "data/thumbnails"
 const maxFileSize int64 = 4 << 30
 const maxURLDownloadSize int64 = 8 << 30
 const maxTextContentSize int64 = 10 << 20
 
-func publicDownloadURL(raw string) (*url.URL, error) {
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return nil, fmt.Errorf("invalid HTTP URL")
-	}
-	addrs, err := net.LookupIP(u.Hostname())
-	if err != nil {
-		return nil, err
-	}
-	for _, ip := range addrs {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-			return nil, fmt.Errorf("private network URL is not allowed")
-		}
-	}
-	return u, nil
-}
-
-func publicOnlyTransport() *http.Transport {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, err
-		}
-		addresses, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-		if err != nil {
-			return nil, err
-		}
-		for _, ip := range addresses {
-			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-				return nil, fmt.Errorf("private network URL is not allowed")
-			}
-		}
-		if len(addresses) == 0 {
-			return nil, fmt.Errorf("host has no IP address")
-		}
-		var lastErr error
-		for _, ip := range addresses {
-			connection, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-			if dialErr == nil {
-				return connection, nil
-			}
-			lastErr = dialErr
-		}
-		return nil, lastErr
-	}
-	return transport
-}
-
-func downloadFilename(resp *http.Response, u *url.URL, requested string) string {
-	if n := strings.TrimSpace(requested); n != "" {
-		return filepath.Base(n)
-	}
-	if _, p, err := mime.ParseMediaType(resp.Header.Get("Content-Disposition")); err == nil {
-		if n := filepath.Base(p["filename"]); n != "." && n != "" {
-			return n
-		}
-	}
-	if n := filepath.Base(u.Path); n != "." && n != "/" && n != "" {
-		if x, e := url.PathUnescape(n); e == nil {
-			return x
-		}
-		return n
-	}
-	return "download-" + time.Now().Format("20060102-150405")
-}
-
-func detectedFileExtension(filename string) string {
-	file, err := os.Open(filename)
-	if err != nil {
-		return ""
-	}
-	defer file.Close()
-	header := make([]byte, 512)
-	n, _ := io.ReadFull(file, header)
-	switch strings.SplitN(http.DetectContentType(header[:n]), ";", 2)[0] {
-	case "image/jpeg":
-		return ".jpg"
-	case "image/png":
-		return ".png"
-	case "image/gif":
-		return ".gif"
-	case "image/webp":
-		return ".webp"
-	case "image/bmp":
-		return ".bmp"
-	case "application/pdf":
-		return ".pdf"
-	default:
-		return ""
-	}
-}
-
-func saveStreamedFile(r *http.Request, expiry, requestedName string) ([]Entry, error) {
-	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil {
-		return nil, err
-	}
-	boundary := params["boundary"]
-	if boundary == "" {
-		return nil, fmt.Errorf("missing multipart boundary")
-	}
-	mr := multipart.NewReader(r.Body, boundary)
-	var expiryValue string
-	saved := false
-	var entries []Entry
-	for {
-		part, e := mr.NextPart()
-		if e == io.EOF {
-			break
-		}
-		if e != nil {
-			return nil, e
-		}
-		field := part.FormName()
-		if field == "expiry" {
-			b, e := io.ReadAll(io.LimitReader(part, 1<<20))
-			if e != nil {
-				return nil, e
-			}
-			expiryValue = string(b)
-			continue
-		}
-		if field == "name" {
-			if _, e := io.Copy(io.Discard, io.LimitReader(part, 1<<20)); e != nil {
-				return nil, e
-			}
-			continue
-		}
-		if field != "file-upload" {
-			continue
-		}
-		name := requestedName
-		if name == "" {
-			name = part.FileName()
-		}
-		if name == "" {
-			name = "upload.bin"
-		}
-		unique := generateUniqueFilename("data/files", name)
-		tmp, e := os.CreateTemp("data/files", ".upload-*.tmp")
-		if e != nil {
-			return nil, e
-		}
-		tmpName := tmp.Name()
-		ok := false
-		defer func() {
-			tmp.Close()
-			if !ok {
-				os.Remove(tmpName)
-			}
-		}()
-		n, e := io.Copy(tmp, io.LimitReader(part, maxFileSize+1))
-		if e != nil {
-			return nil, e
-		}
-		if n > maxFileSize {
-			return nil, fmt.Errorf("file exceeds 4 GB")
-		}
-		if e = tmp.Close(); e != nil {
-			return nil, e
-		}
-		if filepath.Ext(unique) == "" {
-			unique += detectedFileExtension(tmpName)
-			unique = generateUniqueFilename("data/files", unique)
-		}
-		if e = os.Rename(tmpName, filepath.Join("data/files", unique)); e != nil {
-			return nil, e
-		}
-		ok = true
-		id := filepath.Join("files", unique)
-		itemTimeTracker.Create(id)
-		if expiryValue != "" && expiryValue != "Never" {
-			expirationTracker.SetExpiration(id, expiryValue)
-		}
-		if entry, entryErr := fileEntry(id); entryErr == nil {
-			entries = append(entries, *entry)
-		}
-		saved = true
-	}
-	if !saved {
-		return nil, fmt.Errorf("file-upload field is required")
-	}
-	_ = expiry
-	return entries, nil
-}
-
 func thumbnailPath(id string) string { return filepath.Join(thumbnailDir, id+".jpg") }
-
-func streamUploadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if key != "" {
-		defer lockUploadKey(key)()
-	}
-	if key != "" {
-		uploadResults.Lock()
-		cached, ok := uploadResults.values[key]
-		uploadResults.Unlock()
-		if ok {
-			writeJSON(w, http.StatusCreated, map[string]any{"status": "created", "items": cached.Entries})
-			return
-		}
-	}
-	entries, err := saveStreamedFile(r, "", "")
-	if err != nil {
-		log.Printf("Stream upload failed from %s: %v", r.RemoteAddr, err)
-		status := http.StatusBadRequest
-		if strings.Contains(err.Error(), "exceeds 4 GB") {
-			status = http.StatusRequestEntityTooLarge
-		}
-		http.Error(w, err.Error(), status)
-		return
-	}
-	for i := range entries {
-		entry := entries[i]
-		notifyContentItem("created", &entry)
-	}
-	if key != "" {
-		uploadResults.Lock()
-		uploadResults.values[key] = idempotentUpload{Entries: entries, Created: time.Now()}
-		for k, v := range uploadResults.values {
-			if time.Since(v.Created) > 24*time.Hour {
-				delete(uploadResults.values, k)
-			}
-		}
-		uploadResults.Unlock()
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "created", "items": entries})
-}
 
 func ensureThumbnail(id string) (string, error) {
 	src := filepath.Join("data", filepath.FromSlash(id))
@@ -508,68 +250,6 @@ func ensureThumbnail(id string) (string, error) {
 		return "", err
 	}
 	return dst, nil
-}
-
-func initItemTimeTracker() *ItemTimeTracker {
-	t := &ItemTimeTracker{Items: map[string]ItemTimes{}}
-	if data, err := os.ReadFile(filepath.Join("data", "item-times.json")); err == nil {
-		_ = json.Unmarshal(data, t)
-	}
-	if t.Items == nil {
-		t.Items = map[string]ItemTimes{}
-	}
-	return t
-}
-func (t *ItemTimeTracker) save() {
-	data, _ := json.MarshalIndent(t, "", "  ")
-	if err := atomicWriteFile(filepath.Join("data", "item-times.json"), data, 0644); err != nil {
-		log.Printf("Error saving item times: %v", err)
-	}
-}
-func (t *ItemTimeTracker) Get(id string, fallback time.Time) ItemTimes {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	v, ok := t.Items[id]
-	if !ok {
-		v = ItemTimes{fallback, fallback}
-		t.Items[id] = v
-		t.save()
-	}
-	return v
-}
-func (t *ItemTimeTracker) Create(id string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	now := time.Now()
-	t.Items[id] = ItemTimes{now, now}
-	t.save()
-}
-func (t *ItemTimeTracker) Touch(id string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	v, ok := t.Items[id]
-	if !ok {
-		v.CreatedAt = time.Now()
-	}
-	v.ModifiedAt = time.Now()
-	t.Items[id] = v
-	t.save()
-}
-func (t *ItemTimeTracker) Rename(oldID, newID string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if v, ok := t.Items[oldID]; ok {
-		delete(t.Items, oldID)
-		v.ModifiedAt = time.Now()
-		t.Items[newID] = v
-		t.save()
-	}
-}
-func (t *ItemTimeTracker) Delete(id string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	delete(t.Items, id)
-	t.save()
 }
 
 type ExpirationTracker struct {
@@ -678,37 +358,42 @@ func (t *ExpirationTracker) CleanupExpired() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := time.Now()
-	var expiredFiles []string
+	var candidates []string
 	// Find expired files
 	for fileID, expiryTime := range t.Expirations {
 		if now.After(expiryTime) {
-			expiredFiles = append(expiredFiles, fileID)
+			candidates = append(candidates, fileID)
 		}
 	}
-	// Delete expired files
-	for _, fileID := range expiredFiles {
+	var expiredFiles []string
+	// Delete expired payload and metadata as one retriable lifecycle.
+	for _, fileID := range candidates {
 		err := os.Remove(filepath.Join("data", fileID))
 		if err != nil && !os.IsNotExist(err) {
 			log.Printf("Error removing expired file %s: %v", fileID, err)
-		} else {
-			log.Printf("Removed expired file: %s", fileID)
+			continue
 		}
+		record, found := contentLifecycle.Resolve(fileID)
+		if found {
+			var mutationErr error
+			record, mutationErr = contentLifecycle.RemoveStorage(fileID)
+			if mutationErr != nil {
+				log.Printf("Error removing expired metadata %s: %v", fileID, mutationErr)
+				continue
+			}
+		} else {
+			record = IdentityRecord{ID: fileID, Storage: fileID}
+		}
+		log.Printf("Removed expired file: %s", fileID)
 		delete(t.Expirations, fileID)
 		if strings.HasPrefix(fileID, "files/") {
 			_ = os.Remove(thumbnailPath(fileID))
 		}
-		itemTimeTracker.Delete(fileID)
-		_ = favorites.Delete(fileID)
+		notifyContentDelete(record.ID)
+		expiredFiles = append(expiredFiles, fileID)
 	}
 	if len(expiredFiles) > 0 {
 		t.saveToFile()
-		for _, id := range expiredFiles {
-			if record, err := identities.Delete(id, 0); err == nil {
-				notifyContentDelete(record.ID)
-			} else {
-				notifyContentDelete(id)
-			}
-		}
 	}
 	return expiredFiles
 }
@@ -734,34 +419,13 @@ function example() {
 }
 ` + "```"
 
-func generateUniqueFilename(baseDir, baseName string) string {
-	baseName = strings.TrimSpace(baseName)
-	// Sanitize: allow only letters (+unicode), numbers, space, dot, hyphen, underscore, () and []
-	reg := regexp.MustCompile(`[^\p{L}\p{N}\p{M}\s\.\-_()\[\]]`)
-	sanitizedName := reg.ReplaceAllString(baseName, "-")
-	log.Printf("Sanitized name %s TO %s\n", baseName, sanitizedName)
-	// First try without random prefix
-	if _, err := os.Stat(filepath.Join(baseDir, sanitizedName)); os.IsNotExist(err) {
-		return sanitizedName
-	}
-	// If file exists, add random prefix until we find a unique name
-	for {
-		randChars := fmt.Sprintf("%04d", rand.Intn(10000))
-		newName := fmt.Sprintf("%s-%s", randChars, sanitizedName)
-		if _, err := os.Stat(filepath.Join(baseDir, newName)); os.IsNotExist(err) {
-			return newName
-		}
-	}
-}
-
 func fileEntry(id string) (*Entry, error) {
 	id = resolveStorageID(id)
 	info, err := os.Stat(filepath.Join("data", filepath.FromSlash(id)))
 	if err != nil {
 		return nil, err
 	}
-	times := itemTimeTracker.Get(id, info.ModTime())
-	return stableEntry(&Entry{ID: id, Type: "file", Filename: filepath.Base(id), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size()}), nil
+	return stableEntry(&Entry{ID: id, Type: "file", Filename: filepath.Base(id), CreatedAt: info.ModTime(), ModifiedAt: info.ModTime(), Size: info.Size()}), nil
 }
 
 func contentEntry(id string) (*Entry, error) {
@@ -779,8 +443,7 @@ func contentEntry(id string) (*Entry, error) {
 		if err != nil {
 			return nil, err
 		}
-		times := itemTimeTracker.Get(id, info.ModTime())
-		return stableEntry(&Entry{ID: id, Type: "text", Filename: filepath.Base(id), Content: string(body), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size(), Favorite: favorites.Is(id)}), nil
+		return stableEntry(&Entry{ID: id, Type: "text", Filename: filepath.Base(id), Content: string(body), CreatedAt: info.ModTime(), ModifiedAt: info.ModTime(), Size: info.Size()}), nil
 	}
 	return nil, fmt.Errorf("unsupported content id")
 }
@@ -831,115 +494,6 @@ func scheduleDownloadTaskCleanup(id string) {
 	})
 }
 
-func runURLDownloadTask(ctx context.Context, id string, u *url.URL, requestedName, expiry string) {
-	runURLDownloadTaskWithClient(ctx, id, u, requestedName, expiry, publicOnlyTransport())
-}
-
-func runURLDownloadTaskWithClient(ctx context.Context, id string, u *url.URL, requestedName, expiry string, transport http.RoundTripper) {
-	client := &http.Client{Timeout: 30 * time.Minute, Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return fmt.Errorf("too many redirects")
-		}
-		_, err := publicDownloadURL(req.URL.String())
-		return err
-	}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		failURLDownloadTask(id, err)
-		return
-	}
-	downloadTasks.update(id, func(task *DownloadTask) { task.Status = "downloading" })
-	resp, err := client.Do(req)
-	if err != nil {
-		failURLDownloadTask(id, err)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		failURLDownloadTask(id, fmt.Errorf("remote server returned %s", resp.Status))
-		return
-	}
-	if resp.ContentLength > maxURLDownloadSize {
-		failURLDownloadTask(id, fmt.Errorf("remote file exceeds 8 GB"))
-		return
-	}
-	name := downloadFilename(resp, u, requestedName)
-	unique := generateUniqueFilename("data/files", name)
-	downloadTasks.update(id, func(task *DownloadTask) {
-		task.Filename = unique
-		task.Total = resp.ContentLength
-	})
-	tmp, err := os.CreateTemp("data/files", ".url-download-*.tmp")
-	if err != nil {
-		failURLDownloadTask(id, err)
-		return
-	}
-	tmpName := tmp.Name()
-	completed := false
-	defer func() {
-		_ = tmp.Close()
-		if !completed {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	buf := make([]byte, 128*1024)
-	var received int64
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			received += int64(n)
-			if received > maxURLDownloadSize {
-				failURLDownloadTask(id, fmt.Errorf("remote file exceeds 8 GB"))
-				return
-			}
-			if _, err = tmp.Write(buf[:n]); err != nil {
-				failURLDownloadTask(id, err)
-				return
-			}
-			downloadTasks.update(id, func(task *DownloadTask) { task.Received = received })
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			failURLDownloadTask(id, readErr)
-			return
-		}
-		if err = ctx.Err(); err != nil {
-			failURLDownloadTask(id, err)
-			return
-		}
-	}
-	if err = tmp.Close(); err != nil {
-		failURLDownloadTask(id, err)
-		return
-	}
-	dst := filepath.Join("data/files", unique)
-	if err = os.Rename(tmpName, dst); err != nil {
-		failURLDownloadTask(id, err)
-		return
-	}
-	completed = true
-	fileID := filepath.Join("files", unique)
-	itemTimeTracker.Create(fileID)
-	if expiry != "" && expiry != "Never" {
-		expirationTracker.SetExpiration(fileID, expiry)
-	}
-	entry, err := fileEntry(fileID)
-	if err != nil {
-		failURLDownloadTask(id, err)
-		return
-	}
-	downloadTasks.update(id, func(task *DownloadTask) {
-		task.Status = "completed"
-		task.Received = received
-		task.Item = entry
-		task.cancel = nil
-	})
-	scheduleDownloadTaskCleanup(id)
-	notifyContentItem("created", entry)
-}
-
 func main() {
 	flag.Parse()
 
@@ -959,13 +513,17 @@ func main() {
 
 	// Initialize the expiration tracker
 	expirationTracker = initExpirationTracker()
-	itemTimeTracker = initItemTimeTracker()
-	identities = newIdentityStore(filepath.Join("data", "identities.json"))
+	if err := initContentLifecycle("data"); err != nil {
+		log.Fatal(err)
+	}
+	if err := initFileTransfers(); err != nil {
+		log.Fatal(err)
+	}
 	if links, err := os.ReadFile(filepath.Join("data", "links.file")); err == nil {
 		for _, stored := range strings.Split(strings.TrimSpace(string(links)), "\n") {
 			stored = strings.TrimSpace(stored)
 			if stored != "" {
-				identities.MigrateStorage("link/"+url.PathEscape(stored), "link/"+stored)
+				_ = contentLifecycle.MigrateLegacyStorage("link/"+url.PathEscape(stored), "link/"+stored)
 			}
 		}
 	}
@@ -1009,9 +567,7 @@ func main() {
 	registerDeviceHandlers(http.DefaultServeMux, browserDevices)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		clientMux.Lock()
-		snapshotSequence := eventSequence
-		clientMux.Unlock()
+		snapshotSequence := contentEvents.Sequence()
 		w.Header().Set("X-Content-Sequence", strconv.FormatUint(snapshotSequence, 10))
 		// Clean up expired files on page load
 		expirationTracker.CleanupExpired()
@@ -1031,15 +587,13 @@ func main() {
 				continue
 			}
 			id := filepath.Join("text", file.Name())
-			itemTimes := itemTimeTracker.Get(id, info.ModTime())
 			entries = append(entries, Entry{
 				ID:         id,
 				Type:       "text",
 				Content:    string(data),
 				Filename:   file.Name(),
-				CreatedAt:  itemTimes.CreatedAt,
-				ModifiedAt: itemTimes.ModifiedAt,
-				Favorite:   favorites.Is(id),
+				CreatedAt:  info.ModTime(),
+				ModifiedAt: info.ModTime(),
 			})
 		}
 		// Read files
@@ -1053,13 +607,12 @@ func main() {
 				continue
 			}
 			id := filepath.Join("files", file.Name())
-			itemTimes := itemTimeTracker.Get(id, info.ModTime())
 			entries = append(entries, Entry{
 				ID:         id,
 				Type:       "file",
 				Filename:   file.Name(),
-				CreatedAt:  itemTimes.CreatedAt,
-				ModifiedAt: itemTimes.ModifiedAt,
+				CreatedAt:  info.ModTime(),
+				ModifiedAt: info.ModTime(),
 				Size:       info.Size(),
 			})
 		}
@@ -1087,14 +640,13 @@ func main() {
 				if linksInfo != nil {
 					fallback = linksInfo.ModTime().Add(time.Duration(lineIndex-len(lines)) * time.Second)
 				}
-				itemTimes := itemTimeTracker.Get("link/"+storedLine, fallback)
 				entries = append(entries, Entry{
 					ID:         "link/" + storedLine,
 					Type:       "link",
 					Content:    linkURL,
 					Filename:   linkTitle,
-					CreatedAt:  itemTimes.CreatedAt,
-					ModifiedAt: itemTimes.ModifiedAt,
+					CreatedAt:  fallback,
+					ModifiedAt: fallback,
 				})
 			}
 		}
@@ -1133,8 +685,7 @@ func main() {
 				continue
 			}
 			id := filepath.Join("text", file.Name())
-			times := itemTimeTracker.Get(id, info.ModTime())
-			entries = append(entries, Entry{ID: id, Type: "text", Content: string(data), Filename: file.Name(), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Favorite: favorites.Is(id)})
+			entries = append(entries, Entry{ID: id, Type: "text", Content: string(data), Filename: file.Name(), CreatedAt: info.ModTime(), ModifiedAt: info.ModTime()})
 		}
 		files, _ := os.ReadDir(filepath.Join("data", "files"))
 		for _, file := range files {
@@ -1146,8 +697,7 @@ func main() {
 				continue
 			}
 			id := filepath.Join("files", file.Name())
-			times := itemTimeTracker.Get(id, info.ModTime())
-			entries = append(entries, Entry{ID: id, Type: "file", Filename: file.Name(), CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt, Size: info.Size()})
+			entries = append(entries, Entry{ID: id, Type: "file", Filename: file.Name(), CreatedAt: info.ModTime(), ModifiedAt: info.ModTime(), Size: info.Size()})
 		}
 		linksData, err := os.ReadFile(filepath.Join("data", "links.file"))
 		if err == nil {
@@ -1169,17 +719,14 @@ func main() {
 				if linksInfo != nil {
 					fallback = linksInfo.ModTime().Add(time.Duration(index-len(lines)) * time.Second)
 				}
-				times := itemTimeTracker.Get("link/"+stored, fallback)
-				entries = append(entries, Entry{ID: "link/" + stored, Type: "link", Content: linkURL, Filename: title, CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt})
+				entries = append(entries, Entry{ID: "link/" + stored, Type: "link", Content: linkURL, Filename: title, CreatedAt: fallback, ModifiedAt: fallback})
 			}
 		}
 		for i := range entries {
 			stableEntry(&entries[i])
 		}
 		sort.SliceStable(entries, func(i, j int) bool { return entries[i].CreatedAt.After(entries[j].CreatedAt) })
-		clientMux.Lock()
-		snapshotSequence := eventSequence
-		clientMux.Unlock()
+		snapshotSequence := contentEvents.Sequence()
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Sequence", strconv.FormatUint(snapshotSequence, 10))
@@ -1361,23 +908,26 @@ func main() {
 				return
 			}
 			linksFilePath := filepath.Join("data", "links.file")
-			f, err := os.OpenFile(linksFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
+			previousLinks, err := os.ReadFile(linksFilePath)
+			if err != nil && !os.IsNotExist(err) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			defer f.Close()
 			name = strings.TrimSpace(strings.NewReplacer("\t", " ", "\r", " ", "\n", " ").Replace(name))
 			storedLink := content
 			if name != "" {
 				storedLink = name + "\t" + content
 			}
-			if _, err := f.WriteString(storedLink + "\n"); err != nil {
+			nextLinks := append(append([]byte(nil), previousLinks...), []byte(storedLink+"\n")...)
+			if err := atomicWriteFile(linksFilePath, nextLinks, 0644); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			itemTimeTracker.Create("link/" + storedLink)
-			identities.EnsureWithID("link/"+storedLink, clientID)
+			if _, err := contentLifecycle.Add("link/"+storedLink, clientID); err != nil {
+				_ = atomicWriteFile(linksFilePath, previousLinks, 0644)
+				http.Error(w, err.Error(), 500)
+				return
+			}
 			now := time.Now()
 			createdItem = stableEntry(&Entry{ID: "link/" + storedLink, Type: "link", Content: content, Filename: name, CreatedAt: now, ModifiedAt: now})
 			if createdItem.Filename == "" {
@@ -1403,28 +953,22 @@ func main() {
 						if fileName == "" {
 							fileName = fileHeader.Filename
 						}
-						uniqueFileName := generateUniqueFilename("data/files", fileName)
-						f, err := os.Create(filepath.Join("data/files", uniqueFileName))
+						published, err := fileTransfers.Publish(file, fileName, expiryOption, clientID)
 						if err != nil {
 							return err
 						}
-						defer f.Close()
-						if _, err := io.Copy(f, file); err != nil {
-							return err
-						}
-						itemTimeTracker.Create(filepath.Join("files", uniqueFileName))
-						if entry, entryErr := fileEntry(filepath.Join("files", uniqueFileName)); entryErr == nil {
+						if entry, entryErr := fileEntry(published.Storage); entryErr == nil {
 							createdItems = append(createdItems, entry)
 						}
-						if expiryOption != "Never" {
-							fileID := filepath.Join("files", uniqueFileName)
-							expirationTracker.SetExpiration(fileID, expiryOption)
-						}
-						log.Printf("Saved file %s with expiry %s\n", uniqueFileName, expiryOption)
+						log.Printf("Saved file %s with expiry %s\n", published.Filename, expiryOption)
 						return nil
 					}()
 					if err != nil {
-						http.Error(w, err.Error(), http.StatusInternalServerError)
+						status := http.StatusInternalServerError
+						if strings.Contains(err.Error(), "exceeds 4 GB") {
+							status = http.StatusRequestEntityTooLarge
+						}
+						http.Error(w, err.Error(), status)
 						return
 					}
 				}
@@ -1438,13 +982,16 @@ func main() {
 					filename = time.Now().In(chinaStandardTime).Format("01／02 15-04-05")
 				}
 				uniqueFileName := generateUniqueFilename("data/text", filename)
-				err := os.WriteFile(filepath.Join("data/text", uniqueFileName), []byte(content), 0644)
+				err := atomicWriteFile(filepath.Join("data/text", uniqueFileName), []byte(content), 0644)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
-				itemTimeTracker.Create(filepath.Join("text", uniqueFileName))
-				identities.EnsureWithID(filepath.Join("text", uniqueFileName), clientID)
+				if _, err := contentLifecycle.Add(filepath.Join("text", uniqueFileName), clientID); err != nil {
+					_ = os.Remove(filepath.Join("data/text", uniqueFileName))
+					http.Error(w, err.Error(), 500)
+					return
+				}
 				createdName = uniqueFileName
 				now := time.Now()
 				createdItem = stableEntry(&Entry{ID: filepath.Join("text", uniqueFileName), Type: "text", Content: content, Filename: uniqueFileName, CreatedAt: now, ModifiedAt: now})
@@ -1549,64 +1096,17 @@ func main() {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		client := &http.Client{Timeout: 30 * time.Minute, Transport: publicOnlyTransport(), CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("too many redirects")
-			}
-			_, err := publicDownloadURL(req.URL.String())
-			return err
-		}}
-		resp, err := client.Get(u.String())
-		if err != nil {
-			http.Error(w, "Download failed: "+err.Error(), 502)
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			http.Error(w, "Remote server returned "+resp.Status, 502)
-			return
-		}
-		if resp.ContentLength > maxURLDownloadSize {
-			http.Error(w, "Remote file exceeds 8 GB", 413)
-			return
-		}
-		name := downloadFilename(resp, u, r.FormValue("name"))
-		unique := generateUniqueFilename("data/files", name)
-		tmp, err := os.CreateTemp("data/files", ".url-download-*.tmp")
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		tmpName := tmp.Name()
-		ok := false
-		defer func() {
-			tmp.Close()
-			if !ok {
-				os.Remove(tmpName)
-			}
-		}()
-		n, err := io.Copy(tmp, io.LimitReader(resp.Body, maxURLDownloadSize+1))
-		if err != nil || n > maxURLDownloadSize {
-			http.Error(w, "Download failed or exceeds 8 GB", 502)
-			return
-		}
-		if err = tmp.Close(); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		dst := filepath.Join("data/files", unique)
-		if err = os.Rename(tmpName, dst); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		ok = true
-		id := filepath.Join("files", unique)
-		itemTimeTracker.Create(id)
 		expiry := r.FormValue("expiry")
-		if expiry != "" && expiry != "Never" {
-			expirationTracker.SetExpiration(id, expiry)
+		published, err := fileTransfers.Download(r.Context(), u, r.FormValue("name"), expiry, publicOnlyTransport(), nil)
+		if err != nil {
+			status := http.StatusBadGateway
+			if strings.Contains(err.Error(), "exceeds 8 GB") {
+				status = http.StatusRequestEntityTooLarge
+			}
+			http.Error(w, "Download failed: "+err.Error(), status)
+			return
 		}
-		if entry, entryErr := fileEntry(id); entryErr == nil {
+		if entry, entryErr := fileEntry(published.Storage); entryErr == nil {
 			notifyContentItem("created", entry)
 		} else {
 			notifyContentChange()
@@ -1627,7 +1127,7 @@ func main() {
 		}
 		requestedID := strings.TrimPrefix(r.URL.Path, "/rename/")
 		oldPath := resolveStorageID(requestedID)
-		if record, ok := identities.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
+		if record, ok := contentLifecycle.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
 			writeRevisionConflict(w, record)
 			return
 		}
@@ -1664,14 +1164,14 @@ func main() {
 				http.Error(w, "Link not found", http.StatusNotFound)
 				return
 			}
-			if err := os.WriteFile(linksFilePath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+			if err := atomicWriteFile(linksFilePath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
 				http.Error(w, "Failed to save link title", http.StatusInternalServerError)
 				return
 			}
-			itemTimeTracker.Rename("link/"+storedLink, "link/"+newName+"\t"+linkURL)
 			newID := "link/" + newName + "\t" + linkURL
-			record, mutationErr := identities.Mutate(requestedID, newID, expectedRevision(r))
+			record, mutationErr := contentLifecycle.Rename(requestedID, newID, expectedRevision(r))
 			if mutationErr != nil {
+				_ = atomicWriteFile(linksFilePath, data, 0644)
 				if errors.Is(mutationErr, errRevisionConflict) {
 					writeRevisionConflict(w, record)
 					return
@@ -1679,8 +1179,7 @@ func main() {
 				http.Error(w, mutationErr.Error(), 500)
 				return
 			}
-			times := itemTimeTracker.Get(newID, time.Now())
-			notifyContentRename(record.ID, stableEntry(&Entry{ID: newID, Type: "link", Filename: newName, Content: linkURL, CreatedAt: times.CreatedAt, ModifiedAt: times.ModifiedAt}))
+			notifyContentRename(record.ID, stableEntry(&Entry{ID: newID, Type: "link", Filename: newName, Content: linkURL, CreatedAt: time.Now(), ModifiedAt: time.Now()}))
 			if strings.Contains(r.Header.Get("Accept"), "application/json") {
 				item, _ := entryByStorage(newID)
 				writeJSON(w, 200, map[string]any{"status": "renamed", "item": item})
@@ -1706,23 +1205,11 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if strings.HasPrefix(oldPath, "files/") {
-			_ = os.Remove(thumbnailPath(oldPath))
-			_ = os.Remove(thumbnailPath(strings.TrimPrefix(newPath, "data/")))
-		}
 		newID := strings.TrimPrefix(newPath, "data/")
 		newID = strings.ReplaceAll(newID, "\\", "/")
-		expirationTracker.mu.Lock()
-		if expiryTime, hasExpiry := expirationTracker.Expirations[oldPath]; hasExpiry {
-			delete(expirationTracker.Expirations, oldPath)
-			expirationTracker.Expirations[newID] = expiryTime
-			expirationTracker.saveToFile()
-		}
-		expirationTracker.mu.Unlock()
-		itemTimeTracker.Rename(oldPath, newID)
-		_ = favorites.Rename(oldPath, newID)
-		record, mutationErr := identities.Mutate(requestedID, newID, expectedRevision(r))
+		record, mutationErr := contentLifecycle.Rename(requestedID, newID, expectedRevision(r))
 		if mutationErr != nil {
+			_ = os.Rename(newPath, oldFullPath)
 			if errors.Is(mutationErr, errRevisionConflict) {
 				writeRevisionConflict(w, record)
 				return
@@ -1730,6 +1217,17 @@ func main() {
 			http.Error(w, mutationErr.Error(), 500)
 			return
 		}
+		if strings.HasPrefix(oldPath, "files/") {
+			_ = os.Remove(thumbnailPath(oldPath))
+			_ = os.Remove(thumbnailPath(strings.TrimPrefix(newPath, "data/")))
+		}
+		expirationTracker.mu.Lock()
+		if expiryTime, hasExpiry := expirationTracker.Expirations[oldPath]; hasExpiry {
+			delete(expirationTracker.Expirations, oldPath)
+			expirationTracker.Expirations[newID] = expiryTime
+			expirationTracker.saveToFile()
+		}
+		expirationTracker.mu.Unlock()
 		if entry, entryErr := contentEntry(newID); entryErr == nil {
 			notifyContentRename(record.ID, entry)
 			if strings.Contains(r.Header.Get("Accept"), "application/json") {
@@ -1854,7 +1352,7 @@ func main() {
 			writeJSON(w, http.StatusOK, map[string]any{"status": "already_deleted"})
 			return
 		}
-		if record, ok := identities.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
+		if record, ok := contentLifecycle.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
 			writeRevisionConflict(w, record)
 			return
 		}
@@ -1884,13 +1382,21 @@ func main() {
 			if output != "" {
 				output += "\n"
 			}
-			err = os.WriteFile(linksFilePath, []byte(output), 0644)
+			err = atomicWriteFile(linksFilePath, []byte(output), 0644)
 			if err != nil {
 				http.Error(w, "Failed to write links file after deletion", http.StatusInternalServerError)
 				return
 			}
-			itemTimeTracker.Delete("link/" + linkToDelete)
-			record, _ := identities.Delete(requestedID, expectedRevision(r))
+			record, mutationErr := contentLifecycle.Remove(requestedID, expectedRevision(r))
+			if mutationErr != nil {
+				_ = atomicWriteFile(linksFilePath, data, 0644)
+				if errors.Is(mutationErr, errRevisionConflict) {
+					writeRevisionConflict(w, record)
+					return
+				}
+				http.Error(w, mutationErr.Error(), http.StatusInternalServerError)
+				return
+			}
 			notifyContentDelete(record.ID)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -1906,7 +1412,11 @@ func main() {
 		}
 		err := os.Remove(filePath)
 		if os.IsNotExist(err) {
-			record, _ := identities.Delete(requestedID, 0)
+			record, mutationErr := contentLifecycle.Remove(requestedID, 0)
+			if mutationErr != nil {
+				http.Error(w, mutationErr.Error(), http.StatusInternalServerError)
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]any{"status": "already_deleted", "id": record.ID})
 			return
 		}
@@ -1915,16 +1425,22 @@ func main() {
 			http.Error(w, "Failed to delete file", http.StatusInternalServerError)
 			return
 		}
+		record, mutationErr := contentLifecycle.Remove(requestedID, expectedRevision(r))
+		if mutationErr != nil {
+			if errors.Is(mutationErr, errRevisionConflict) {
+				writeRevisionConflict(w, record)
+				return
+			}
+			http.Error(w, mutationErr.Error(), http.StatusInternalServerError)
+			return
+		}
 		if strings.HasPrefix(id, "files/") {
 			_ = os.Remove(thumbnailPath(id))
 		}
-		itemTimeTracker.Delete(id)
-		_ = favorites.Delete(id)
 		expirationTracker.mu.Lock()
 		delete(expirationTracker.Expirations, id)
 		expirationTracker.saveToFile()
 		expirationTracker.mu.Unlock()
-		record, _ := identities.Delete(requestedID, expectedRevision(r))
 		notifyContentDelete(record.ID)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1939,7 +1455,7 @@ func main() {
 		}
 		requestedID := strings.TrimPrefix(r.URL.Path, "/favorite/")
 		id := resolveStorageID(requestedID)
-		if record, ok := identities.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
+		if record, ok := contentLifecycle.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
 			writeRevisionConflict(w, record)
 			return
 		}
@@ -1957,11 +1473,7 @@ func main() {
 			return
 		}
 		value := raw == "true" || raw == "1"
-		if err := favorites.Set(id, value); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		record, mutationErr := identities.Mutate(requestedID, "", expectedRevision(r))
+		record, mutationErr := contentLifecycle.SetFavorite(requestedID, value, expectedRevision(r))
 		if mutationErr != nil {
 			if errors.Is(mutationErr, errRevisionConflict) {
 				writeRevisionConflict(w, record)
@@ -1986,7 +1498,7 @@ func main() {
 		}
 		requestedID := strings.TrimPrefix(r.URL.Path, "/edit/")
 		id := resolveStorageID(requestedID)
-		if record, ok := identities.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
+		if record, ok := contentLifecycle.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
 			writeRevisionConflict(w, record)
 			return
 		}
@@ -2000,18 +1512,19 @@ func main() {
 			http.Error(w, "Content cannot be empty", http.StatusBadRequest)
 			return
 		}
-		info, statErr := os.Stat(filePath)
-		err := os.WriteFile(filePath, []byte(content), 0644)
+		previousContent, err := os.ReadFile(filePath)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if statErr == nil {
-			itemTimeTracker.Get(id, info.ModTime())
+		err = atomicWriteFile(filePath, []byte(content), 0644)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		itemTimeTracker.Touch(id)
-		record, mutationErr := identities.Mutate(requestedID, "", expectedRevision(r))
+		record, mutationErr := contentLifecycle.Edit(requestedID, expectedRevision(r))
 		if mutationErr != nil {
+			_ = atomicWriteFile(filePath, previousContent, 0644)
 			if errors.Is(mutationErr, errRevisionConflict) {
 				writeRevisionConflict(w, record)
 				return
