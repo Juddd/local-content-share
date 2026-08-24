@@ -49,15 +49,20 @@ jobs:
               --title "Local Content Share 个人增强版 $RELEASE_TAG" \
               --notes-file .github/release-notes-v40.6.md
           fi
-      - name: Attach signed Android APK
+      - name: Attach signed Android APK when NAS is reachable
         env:
           GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
         run: |
-          curl --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
-            -o content-transfer-v1.0.64.apk \
-            http://nas.yode.ink:8084/download/files/content-transfer-v1.0.64.apk
-          echo "1ed13a43f682ac0b4c62064e03700df9c866b750f6af1bbb5fb9a1c8cfd8e1b  content-transfer-v1.0.64.apk" | sha256sum --check
-          gh release upload "$RELEASE_TAG" content-transfer-v1.0.64.apk --clobber
+          apk=content-transfer-v1.0.64.apk
+          if curl --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
+              -o "$apk" \
+              http://nas.yode.ink:8084/download/files/content-transfer-v1.0.64.apk \
+              && echo "1ed13a43f682ac0b4c62064e03700df9c866b750f6af1bbb5fb9a1c8cfd8e1b  $apk" | sha256sum --check; then
+            gh release upload "$RELEASE_TAG" "$apk" --clobber
+          else
+            echo "NAS APK is unavailable; keeping the existing release asset and continuing image publication" >&2
+          fi
 
   publish-image:
     needs: test
