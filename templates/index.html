@@ -1077,10 +1077,17 @@
         // separate channel from content events so they never consume content
         // sequence numbers.
         const deviceSessionId = (() => {
-            if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
-            const bytes = new Uint8Array(24);
-            crypto.getRandomValues(bytes);
-            return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+            const key = 'lcs-device-session';
+            let value = sessionStorage.getItem(key);
+            if (value) return value;
+            if (window.crypto && crypto.randomUUID) value = crypto.randomUUID();
+            else {
+                const bytes = new Uint8Array(24);
+                crypto.getRandomValues(bytes);
+                value = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+            }
+            sessionStorage.setItem(key, value);
+            return value;
         })();
         const browserDeviceInfo = (() => {
             const ua = navigator.userAgent || '';

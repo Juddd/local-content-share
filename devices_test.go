@@ -164,3 +164,47 @@ func TestDeviceInputValidation(t *testing.T) {
 		t.Fatal("device administration API must not bypass a locked browser cookie")
 	}
 }
+
+func TestClassifyDeviceIP(t *testing.T) {
+	cases := map[string]string{
+		"192.168.3.20":         "lan",
+		"10.20.30.40":          "lan",
+		"127.0.0.1":            "lan",
+		"::1":                  "lan",
+		"8.8.8.8":              "wan",
+		"2001:4860:4860::8888": "wan",
+		"invalid":              "",
+	}
+	for value, want := range cases {
+		if got := classifyDeviceIP(value); got != want {
+			t.Errorf("classifyDeviceIP(%q) = %q, want %q", value, got, want)
+		}
+	}
+}
+
+func TestDeviceRetentionCleanup(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "devices.json")
+	store := newDeviceStore(path)
+	store.now = func() time.Time { return now }
+
+	oldID, _ := randomDeviceID()
+	recentID, _ := randomDeviceID()
+	activeID, _ := randomDeviceID()
+	store.devices[oldID] = &BrowserDevice{ID: oldID, CreatedAt: now.Add(-40 * 24 * time.Hour), LastSeen: now.Add(-31 * 24 * time.Hour)}
+	store.devices[recentID] = &BrowserDevice{ID: recentID, CreatedAt: now.Add(-40 * 24 * time.Hour), LastActivity: now.Add(-29 * 24 * time.Hour)}
+	store.devices[activeID] = &BrowserDevice{ID: activeID, CreatedAt: now.Add(-40 * 24 * time.Hour), LastSeen: now.Add(-31 * 24 * time.Hour)}
+	store.sessions[activeID+"\x00session-0000000000000001"] = &browserSession{ID: "session-0000000000000001", DeviceID: activeID, LastSeen: now}
+	if err := store.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
+
+	views := store.list()
+	if len(views) != 2 || store.devices[oldID] != nil || store.devices[recentID] == nil || store.devices[activeID] == nil {
+		t.Fatalf("unexpected cleanup result: views=%#v devices=%#v", views, store.devices)
+	}
+	reloaded := newDeviceStore(path)
+	if reloaded.devices[oldID] != nil || reloaded.devices[recentID] == nil || reloaded.devices[activeID] == nil {
+		t.Fatalf("cleanup was not persisted: %#v", reloaded.devices)
+	}
+}

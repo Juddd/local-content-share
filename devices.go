@@ -18,9 +18,11 @@ import (
 )
 
 const (
-	deviceCookieName = "lcs_device"
-	deviceCookieAge  = 10 * 365 * 24 * 60 * 60
-	deviceOnlineTTL  = 40 * time.Second
+	deviceCookieName          = "lcs_device"
+	deviceCookieAge           = 10 * 365 * 24 * 60 * 60
+	deviceOnlineTTL           = 40 * time.Second
+	deviceRetention           = 30 * 24 * time.Hour
+	deviceSeenPersistInterval = 5 * time.Minute
 )
 
 var (
@@ -29,16 +31,17 @@ var (
 )
 
 type BrowserDevice struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name,omitempty"`
-	Platform     string    `json:"platform,omitempty"`
-	Browser      string    `json:"browser,omitempty"`
-	Locked       bool      `json:"locked"`
-	LockedAt     time.Time `json:"lockedAt,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
-	LastSeen     time.Time `json:"lastSeen,omitempty"`
-	LastActivity time.Time `json:"lastActivity,omitempty"`
-	LastIP       string    `json:"ip,omitempty"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name,omitempty"`
+	Platform      string    `json:"platform,omitempty"`
+	Browser       string    `json:"browser,omitempty"`
+	Locked        bool      `json:"locked"`
+	LockedAt      time.Time `json:"lockedAt,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
+	LastSeen      time.Time `json:"lastSeen,omitempty"`
+	LastActivity  time.Time `json:"lastActivity,omitempty"`
+	LastIP        string    `json:"ip,omitempty"`
+	persistedSeen time.Time
 }
 
 type browserSession struct {
@@ -65,6 +68,7 @@ type deviceView struct {
 	LastSeen     time.Time `json:"lastSeen,omitempty"`
 	LastActivity time.Time `json:"lastActivity,omitempty"`
 	IP           string    `json:"ip,omitempty"`
+	Network      string    `json:"network,omitempty"`
 	State        string    `json:"state"`
 	Tabs         int       `json:"tabs"`
 }
@@ -94,6 +98,7 @@ func newDeviceStore(path string) *deviceStore {
 			for _, device := range stored.Devices {
 				if device != nil && deviceIDPattern.MatchString(device.ID) {
 					copy := *device
+					copy.persistedSeen = copy.LastSeen
 					s.devices[copy.ID] = &copy
 				}
 			}
@@ -230,6 +235,17 @@ func requestIP(r *http.Request) string {
 	return ""
 }
 
+func classifyDeviceIP(value string) string {
+	ip := net.ParseIP(strings.TrimSpace(value))
+	if ip == nil {
+		return ""
+	}
+	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		return "lan"
+	}
+	return "wan"
+}
+
 func (s *deviceStore) heartbeat(id string, input heartbeatRequest, ip string) (bool, error) {
 	now := s.now()
 	platform, err := cleanDeviceLabel(input.Platform, 40)
@@ -262,6 +278,9 @@ func (s *deviceStore) heartbeat(id string, input heartbeatRequest, ip string) (b
 		}
 		persist = true
 	}
+	if device.persistedSeen.IsZero() || now.Sub(device.persistedSeen) >= deviceSeenPersistInterval {
+		persist = true
+	}
 	device.LastSeen = now
 	session := s.sessions[key]
 	if session == nil {
@@ -286,6 +305,7 @@ func (s *deviceStore) heartbeat(id string, input heartbeatRequest, ip string) (b
 		if err := s.saveLocked(); err != nil {
 			return locked, err
 		}
+		device.persistedSeen = now
 	}
 	return locked, nil
 }
@@ -312,6 +332,31 @@ func (s *deviceStore) list() []deviceView {
 		if now.Sub(session.LastSeen) > 10*deviceOnlineTTL {
 			delete(s.sessions, key)
 		}
+	}
+	removed := false
+	for id, device := range s.devices {
+		activeSession := false
+		for _, session := range s.sessions {
+			if session.DeviceID == id {
+				activeSession = true
+				break
+			}
+		}
+		latest := device.CreatedAt
+		if device.LastSeen.After(latest) {
+			latest = device.LastSeen
+		}
+		if device.LastActivity.After(latest) {
+			latest = device.LastActivity
+		}
+		if !activeSession && !latest.IsZero() && now.Sub(latest) > deviceRetention {
+			delete(s.devices, id)
+			delete(s.listeners, id)
+			removed = true
+		}
+	}
+	if removed {
+		_ = s.saveLocked()
 	}
 	result := make([]deviceView, 0, len(s.devices))
 	for _, device := range s.devices {
@@ -341,7 +386,7 @@ func (s *deviceStore) list() []deviceView {
 		if device.Locked {
 			state = "locked"
 		}
-		result = append(result, deviceView{ID: device.ID, Name: device.Name, DisplayName: firstNonEmpty(device.Name, defaultDeviceName(device)), Platform: device.Platform, Browser: device.Browser, Locked: device.Locked, LockedAt: device.LockedAt, CreatedAt: device.CreatedAt, LastSeen: lastSeen, LastActivity: lastActivity, IP: device.LastIP, State: state, Tabs: tabs})
+		result = append(result, deviceView{ID: device.ID, Name: device.Name, DisplayName: firstNonEmpty(device.Name, defaultDeviceName(device)), Platform: device.Platform, Browser: device.Browser, Locked: device.Locked, LockedAt: device.LockedAt, CreatedAt: device.CreatedAt, LastSeen: lastSeen, LastActivity: lastActivity, IP: device.LastIP, Network: classifyDeviceIP(device.LastIP), State: state, Tabs: tabs})
 	}
 	sort.SliceStable(result, func(i, j int) bool {
 		rank := func(state string) int {
