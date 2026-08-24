@@ -10,7 +10,9 @@
 
 本次没有 Android 代码变化，现有 App 会直接读取服务端的新判断结果，无需升级。
 
-Release 继续附带兼容的 `content-transfer-v1.0.64.apk` 供新安装使用。
+Release 附带兼容的 `content-transfer-v1.0.65.apk` 供新安装使用。
+
+- SHA-256：`9dddded38e3ecc55f16dc5c3913330b35d690e182510c29ec919ad85ea10d4ef`
 
 ## 容器镜像
 
