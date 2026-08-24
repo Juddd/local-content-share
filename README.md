@@ -5,7 +5,7 @@
   <a href="https://github.com/Juddd/local-content-share/actions/workflows/docker-publish.yml"><img alt="容器构建状态" src="https://github.com/Juddd/local-content-share/actions/workflows/docker-publish.yml/badge.svg"></a>
   <a href="https://github.com/Juddd/local-content-share/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/Juddd/local-content-share"></a>
   <br><br>
-  <a href="#功能">功能</a> &bull; <a href="#本增强版新增内容">增强内容</a> &bull; <a href="#docker-部署">Docker 部署</a> &bull; <a href="#使用说明">使用说明</a>
+  <a href="#界面预览">界面预览</a> &bull; <a href="#功能">功能</a> &bull; <a href="#本增强版新增内容">增强内容</a> &bull; <a href="#docker-部署">Docker 部署</a> &bull; <a href="#使用说明">使用说明</a>
 </div>
 
 ---
@@ -16,6 +16,29 @@ Local Content Share 是一个简洁的自托管内容中转服务，可以在不
 
 > [!WARNING]
 > 本项目没有用户认证和权限系统。若直接暴露到公网，任何能够访问地址的人都可能查看、上传或删除内容。请根据实际需要在反向代理层增加认证与访问限制。
+
+## 界面预览
+
+### 网页端
+
+<p align="center">
+  <img src="https://github.com/Juddd/local-content-share/releases/download/v40.7/readme-desktop.jpg" alt="Local Content Share 桌面网页界面" width="100%">
+</p>
+
+> 截图中的文字卡片正文已经过不可逆模糊处理，避免在公开仓库中泄露私人内容和访问凭据。
+
+### Android App
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="https://github.com/Juddd/local-content-share/releases/download/v40.7/readme-android-files.jpg" alt="Android App 文件界面"></td>
+    <td align="center" width="50%"><img src="https://github.com/Juddd/local-content-share/releases/download/v40.7/readme-android-devices.jpg" alt="Android App 浏览器设备界面"></td>
+  </tr>
+  <tr>
+    <td align="center">文件管理</td>
+    <td align="center">浏览器设备与远程锁定</td>
+  </tr>
+</table>
 
 ## 功能
 
