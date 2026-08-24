@@ -170,9 +170,9 @@ func TestClassifyDeviceIP(t *testing.T) {
 	cases := map[string]string{
 		"192.168.3.20":         "lan",
 		"10.20.30.40":          "lan",
-		"127.0.0.1":            "lan",
+		"127.0.0.1":            "unknown",
 		"192.168.32.1":         "unknown",
-		"::1":                  "lan",
+		"::1":                  "unknown",
 		"8.8.8.8":              "wan",
 		"2001:4860:4860::8888": "wan",
 		"invalid":              "",
