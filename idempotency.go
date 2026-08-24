@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
@@ -24,7 +25,7 @@ var mutations *mutationCache
 
 func newMutationCache(path string) *mutationCache {
 	m := &mutationCache{Values: map[string]mutationResponse{}, path: path}
-	if b, e := osReadFile(path); e == nil {
+	if b, e := os.ReadFile(path); e == nil {
 		_ = json.Unmarshal(b, m)
 	}
 	if m.Values == nil {

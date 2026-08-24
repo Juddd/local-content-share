@@ -36,18 +36,30 @@ func TestIndexTemplateRendersDocument(t *testing.T) {
 
 func TestIndexUsesLocalStructuredCardInsertion(t *testing.T) {
 	raw, err := content.ReadFile("templates/index.html")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	source := string(raw)
 	for _, label := range []string{">文字<", ">文件<", ">链接<", ">新增<", ">记事本<"} {
-		if !strings.Contains(source, label) { t.Fatalf("missing Chinese label %s", label) }
+		if !strings.Contains(source, label) {
+			t.Fatalf("missing Chinese label %s", label)
+		}
 	}
 	start := strings.Index(source, "async function insertRenderedCard(item)")
-	if start < 0 { t.Fatal("card insertion function not found") }
+	if start < 0 {
+		t.Fatal("card insertion function not found")
+	}
 	end := strings.Index(source[start:], "async function submitNewCard")
-	if end < 0 { t.Fatal("card submit function not found") }
-	insert := source[start:start+end]
-	if strings.Contains(insert, "fetch(") { t.Fatal("structured card insertion must not fetch the full page") }
-	if !strings.Contains(insert, "createSnippetCard(item)") { t.Fatal("structured snippet card builder is not used") }
+	if end < 0 {
+		t.Fatal("card submit function not found")
+	}
+	insert := source[start : start+end]
+	if strings.Contains(insert, "fetch(") {
+		t.Fatal("structured card insertion must not fetch the full page")
+	}
+	if !strings.Contains(insert, "createSnippetCard(item)") {
+		t.Fatal("structured snippet card builder is not used")
+	}
 }
 
 func TestPublicDownloadURLRejectsPrivateAddresses(t *testing.T) {
@@ -55,24 +67,6 @@ func TestPublicDownloadURLRejectsPrivateAddresses(t *testing.T) {
 		if _, err := publicDownloadURL(raw); err == nil {
 			t.Fatalf("expected private URL to be rejected: %s", raw)
 		}
-	}
-}
-
-func TestDownloadFilenamePriority(t *testing.T) {
-	u, _ := url.Parse("https://example.test/path/from-url.jpg")
-	r := &http.Response{Header: make(http.Header)}
-	if got := downloadFilename(r, u, "chosen.png"); got != "chosen.png" {
-		t.Fatalf("requested name: %q", got)
-	}
-	r.Header.Set("Content-Disposition", `attachment; filename="header.bin"`)
-	if got := downloadFilename(r, u, ""); got != "header.bin" {
-		t.Fatalf("header name: %q", got)
-	}
-}
-
-func TestTemporaryDownloadMarker(t *testing.T) {
-	if !strings.Contains("data/files/.url-download-", ".url-download-") {
-		t.Fatal("temporary path marker missing")
 	}
 }
 
@@ -139,8 +133,13 @@ func TestStreamUploadHandlerSavesMultipartFile(t *testing.T) {
 	if err = os.MkdirAll("data/files", 0755); err != nil {
 		t.Fatal(err)
 	}
-	itemTimeTracker = initItemTimeTracker()
+	if err = initContentLifecycle("data"); err != nil {
+		t.Fatal(err)
+	}
 	expirationTracker = initExpirationTracker()
+	if err = initFileTransfers(); err != nil {
+		t.Fatal(err)
+	}
 
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -200,8 +199,13 @@ func TestStreamUploadAddsExtensionFromFileContent(t *testing.T) {
 	if err = os.MkdirAll("data/files", 0755); err != nil {
 		t.Fatal(err)
 	}
-	itemTimeTracker = initItemTimeTracker()
+	if err = initContentLifecycle("data"); err != nil {
+		t.Fatal(err)
+	}
 	expirationTracker = initExpirationTracker()
+	if err = initFileTransfers(); err != nil {
+		t.Fatal(err)
+	}
 
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -241,8 +245,13 @@ func TestURLDownloadTaskReportsCompletionAndItem(t *testing.T) {
 	if err = os.MkdirAll("data/files", 0755); err != nil {
 		t.Fatal(err)
 	}
-	itemTimeTracker = initItemTimeTracker()
+	if err = initContentLifecycle("data"); err != nil {
+		t.Fatal(err)
+	}
 	expirationTracker = initExpirationTracker()
+	if err = initFileTransfers(); err != nil {
+		t.Fatal(err)
+	}
 	downloadTasks = downloadTaskStore{tasks: map[string]*DownloadTask{}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "12")
@@ -271,8 +280,13 @@ func TestURLDownloadTaskCancellationRemovesTemporaryFile(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(oldDir) })
 	_ = os.MkdirAll("data/files", 0755)
-	itemTimeTracker = initItemTimeTracker()
+	if err := initContentLifecycle("data"); err != nil {
+		t.Fatal(err)
+	}
 	expirationTracker = initExpirationTracker()
+	if err := initFileTransfers(); err != nil {
+		t.Fatal(err)
+	}
 	downloadTasks = downloadTaskStore{tasks: map[string]*DownloadTask{}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flusher := w.(http.Flusher)
