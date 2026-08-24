@@ -220,25 +220,58 @@ func cleanDeviceLabel(value string, maxRunes int) (string, error) {
 }
 
 func requestIP(r *http.Request) string {
-	for _, value := range []string{strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0], r.Header.Get("X-Real-IP")} {
-		if ip := net.ParseIP(strings.TrimSpace(value)); ip != nil {
-			return ip.String()
+	remote := parseRequestIP(r.RemoteAddr)
+	// Forwarding headers are client-controlled unless the immediate peer is a
+	// proxy explicitly listed in LCS_TRUSTED_PROXY_CIDRS. Without this check a
+	// browser can forge an X-Forwarded-For value and change its network label.
+	if remote != nil && trustedProxyIP(remote) {
+		for _, value := range []string{strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0], r.Header.Get("X-Real-IP")} {
+			if ip := net.ParseIP(strings.TrimSpace(value)); ip != nil {
+				return ip.String()
+			}
 		}
+		// A trusted proxy that does not forward the client address gives us no
+		// reliable network classification. Do not report the proxy's private IP.
+		return ""
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
-	}
-	if ip := net.ParseIP(strings.TrimSpace(r.RemoteAddr)); ip != nil {
-		return ip.String()
+	if remote != nil {
+		return remote.String()
 	}
 	return ""
+}
+
+func parseRequestIP(address string) net.IP {
+	if host, _, err := net.SplitHostPort(strings.TrimSpace(address)); err == nil {
+		return net.ParseIP(host)
+	}
+	return net.ParseIP(strings.TrimSpace(address))
+}
+
+func trustedProxyIP(ip net.IP) bool {
+	value := strings.TrimSpace(os.Getenv("LCS_TRUSTED_PROXY_CIDRS"))
+	if value == "" || ip == nil {
+		return false
+	}
+	for _, raw := range strings.Split(value, ",") {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(raw))
+		if err == nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyDeviceIP(value string) string {
 	ip := net.ParseIP(strings.TrimSpace(value))
 	if ip == nil {
 		return ""
+	}
+	// A persisted address can be a known reverse-proxy/Docker gateway from an
+	// older deployment. It is infrastructure, not evidence that the browser is
+	// on the same LAN. Treat it as unknown until the next heartbeat records the
+	// real source address.
+	if trustedProxyIP(ip) {
+		return "unknown"
 	}
 	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
 		return "lan"
@@ -271,11 +304,12 @@ func (s *deviceStore) heartbeat(id string, input heartbeatRequest, ip string) (b
 		s.devices[id] = device
 		persist = true
 	}
-	if device.Platform != platform || device.Browser != browser || (ip != "" && device.LastIP != ip) {
+	if device.Platform != platform || device.Browser != browser || device.LastIP != ip {
 		device.Platform, device.Browser = platform, browser
-		if ip != "" {
-			device.LastIP = ip
-		}
+		// An empty address is intentional when a trusted proxy omitted the
+		// client address. Clear an old gateway value instead of displaying it
+		// forever as if it belonged to the browser.
+		device.LastIP = ip
 		persist = true
 	}
 	if device.persistedSeen.IsZero() || now.Sub(device.persistedSeen) >= deviceSeenPersistInterval {

@@ -57,12 +57,15 @@ services:
     image: ghcr.io/juddd/local-content-share:latest
     container_name: local-content-share
     restart: unless-stopped
-    ports:
-      - "8084:8080"
+    # 保留浏览器真实源 IP，用于设备中心准确区分局域网和外网。
+    network_mode: host
+    command: ["/app/local-content-share", "--listen=:8084"]
     volumes:
       - /volume1/docker/local-content-share/data:/app/data
     environment:
       TZ: Asia/Shanghai
+      # 旧桥接部署遗留的 Docker 网关地址，不作为浏览器局域网地址。
+      LCS_TRUSTED_PROXY_CIDRS: 192.168.32.0/20
 ```
 
 启动项目：
@@ -71,7 +74,7 @@ services:
 docker compose up -d
 ```
 
-服务默认监听容器内的 `8080` 端口。上面的示例会通过宿主机 `8084` 端口访问。
+上面的示例使用宿主机网络并监听 `8084` 端口，以便服务端能看到浏览器的真实源 IP；如果你的部署环境必须使用桥接网络，也可以恢复端口映射，但设备中心在这种情况下只能显示“网络未知”。
 
 数据全部保存在挂载到 `/app/data` 的目录中。更新或重建容器不会删除这些数据。
 

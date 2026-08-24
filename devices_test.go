@@ -166,10 +166,12 @@ func TestDeviceInputValidation(t *testing.T) {
 }
 
 func TestClassifyDeviceIP(t *testing.T) {
+	t.Setenv("LCS_TRUSTED_PROXY_CIDRS", "192.168.32.0/20")
 	cases := map[string]string{
 		"192.168.3.20":         "lan",
 		"10.20.30.40":          "lan",
 		"127.0.0.1":            "lan",
+		"192.168.32.1":         "unknown",
 		"::1":                  "lan",
 		"8.8.8.8":              "wan",
 		"2001:4860:4860::8888": "wan",
@@ -179,6 +181,37 @@ func TestClassifyDeviceIP(t *testing.T) {
 		if got := classifyDeviceIP(value); got != want {
 			t.Errorf("classifyDeviceIP(%q) = %q, want %q", value, got, want)
 		}
+	}
+}
+
+func TestRequestIPOnlyTrustsForwardingHeadersFromConfiguredProxy(t *testing.T) {
+	t.Setenv("LCS_TRUSTED_PROXY_CIDRS", "192.168.32.0/20")
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	request.RemoteAddr = "192.168.32.1:4567"
+	request.Header.Set("X-Forwarded-For", "203.0.113.17")
+	if got := requestIP(request); got != "203.0.113.17" {
+		t.Fatalf("requestIP() = %q, want trusted forwarded client address", got)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	request.RemoteAddr = "192.168.32.1:4567"
+	request.Header.Set("X-Forwarded-For", "192.168.3.20")
+	if got := requestIP(request); got != "192.168.3.20" {
+		t.Fatalf("requestIP() = %q, want trusted forwarded LAN address", got)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	request.RemoteAddr = "8.8.8.8:4567"
+	request.Header.Set("X-Forwarded-For", "192.168.3.20")
+	if got := requestIP(request); got != "8.8.8.8" {
+		t.Fatalf("requestIP() trusted an untrusted forwarding header: %q", got)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	request.RemoteAddr = "192.168.32.1:4567"
+	if got := requestIP(request); got != "" {
+		t.Fatalf("requestIP() = %q, want empty when trusted proxy omits client address", got)
 	}
 }
 
