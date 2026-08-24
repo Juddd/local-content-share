@@ -54,11 +54,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         continue-on-error: true
         run: |
-          apk=content-transfer-v1.0.64.apk
+          apk=content-transfer-v1.0.65.apk
           if curl --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
               -o "$apk" \
-              http://nas.yode.ink:8084/download/files/content-transfer-v1.0.64.apk \
-              && echo "1ed13a43f682ac0b4c62064e03700df9c866b750f6af1bbb5fb9a1c8cfd8e1b  $apk" | sha256sum --check; then
+              http://nas.yode.ink:8084/download/files/content-transfer-v1.0.65.apk \
+              && echo "9dddded38e3ecc55f16dc5c3913330b35d690e182510c29ec919ad85ea10d4ef  $apk" | sha256sum --check; then
             gh release upload "$RELEASE_TAG" "$apk" --clobber
           else
             echo "NAS APK is unavailable; keeping the existing release asset and continuing image publication" >&2
