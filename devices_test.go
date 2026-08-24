@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 package main
 
 import (
@@ -162,6 +163,22 @@ func TestDeviceInputValidation(t *testing.T) {
 	}
 	if devicePathAllowedWhileLocked("/api/v1/devices") {
 		t.Fatal("device administration API must not bypass a locked browser cookie")
+	}
+}
+
+func TestDeviceNetworkPingAllowsPrivateNetworkPreflight(t *testing.T) {
+	store := newDeviceStore(filepath.Join(t.TempDir(), "devices.json"))
+	mux := http.NewServeMux()
+	registerDeviceHandlers(mux, store)
+	request := httptest.NewRequest(http.MethodOptions, "/api/v1/device/network-ping", nil)
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("network preflight returned %d", response.Code)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Private-Network"); got != "true" {
+		t.Fatalf("private-network preflight header = %q", got)
 	}
 }
 

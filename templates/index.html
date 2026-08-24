@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 {{define "section-sort"}}
 <div class="relative section-sort" data-list="{{.}}">
     <button type="button" class="section-sort-button flex items-center gap-2 px-3 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors" title="排序"><i class="fas fa-arrow-down-wide-short text-subtext0"></i><span class="section-sort-text font-medium text-sm text-subtext0">创建时间 ↓</span></button>
@@ -1166,14 +1167,21 @@
                 const addresses = (await response.json()).addresses || [];
                 const page = new URL(location.href);
                 const port = page.port || (page.protocol === 'https:' ? '443' : '80');
-                const probes = addresses.map(address => {
+                const probes = addresses.map(async address => {
                     const url = `${page.protocol}//${address}:${port}/api/v1/device/network-ping?probe=${Date.now()}`;
-                    return fetch(url, {mode: 'no-cors', cache: 'no-store'}).then(() => true);
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 3000);
+                    try {
+                        await fetch(url, {mode: 'no-cors', cache: 'no-store', signal: controller.signal});
+                        return true;
+                    } catch (_) {
+                        return false;
+                    } finally {
+                        clearTimeout(timeout);
+                    }
                 });
                 if (!probes.length) return;
-                if (Promise.any) await Promise.any(probes);
-                else await Promise.race(probes);
-                browserNetworkHint = 'lan';
+                browserNetworkHint = (await Promise.all(probes)).some(Boolean) ? 'lan' : 'wan';
             } catch (_) {
                 // The local NAS address is unreachable, so the same hostname
                 // is being reached through the public route.
