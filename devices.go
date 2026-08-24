@@ -566,6 +566,12 @@ func localDeviceProbeAddresses() []string {
 	seen := make(map[string]struct{})
 	addresses := make([]string, 0, 2)
 	for _, iface := range interfaces {
+		// Do not advertise Docker bridge/veth addresses. They are local
+		// container infrastructure and are not LAN addresses reachable by a
+		// browser on the home network.
+		if iface.Name == "lo" || strings.HasPrefix(iface.Name, "docker") || strings.HasPrefix(iface.Name, "br-") || strings.HasPrefix(iface.Name, "veth") {
+			continue
+		}
 		values, err := iface.Addrs()
 		if err != nil {
 			continue
