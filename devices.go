@@ -248,8 +248,17 @@ func parseRequestIP(address string) net.IP {
 }
 
 func trustedProxyIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	// A request cannot arrive from loopback over the network. On this NAS the
+	// front proxy forwards requests locally, so loopback is always a trusted
+	// hop for reading its sanitized client-IP headers.
+	if ip.IsLoopback() {
+		return true
+	}
 	value := strings.TrimSpace(os.Getenv("LCS_TRUSTED_PROXY_CIDRS"))
-	if value == "" || ip == nil {
+	if value == "" {
 		return false
 	}
 	for _, raw := range strings.Split(value, ",") {

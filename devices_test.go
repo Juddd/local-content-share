@@ -188,6 +188,13 @@ func TestRequestIPOnlyTrustsForwardingHeadersFromConfiguredProxy(t *testing.T) {
 	t.Setenv("LCS_TRUSTED_PROXY_CIDRS", "192.168.32.0/20")
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
+	request.RemoteAddr = "127.0.0.1:4567"
+	request.Header.Set("X-Forwarded-For", "203.0.113.18")
+	if got := requestIP(request); got != "203.0.113.18" {
+		t.Fatalf("requestIP() = %q, want forwarded address from loopback proxy", got)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
 	request.RemoteAddr = "192.168.32.1:4567"
 	request.Header.Set("X-Forwarded-For", "203.0.113.17")
 	if got := requestIP(request); got != "203.0.113.17" {
