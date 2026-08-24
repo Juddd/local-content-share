@@ -439,7 +439,11 @@ func (s *deviceStore) list() []deviceView {
 		if network == "" || network == "unknown" {
 			network = device.NetworkHint
 		}
-		result = append(result, deviceView{ID: device.ID, Name: device.Name, DisplayName: firstNonEmpty(device.Name, defaultDeviceName(device)), Platform: device.Platform, Browser: device.Browser, Locked: device.Locked, LockedAt: device.LockedAt, CreatedAt: device.CreatedAt, LastSeen: lastSeen, LastActivity: lastActivity, IP: device.LastIP, Network: network, State: state, Tabs: tabs})
+		displayIP := device.LastIP
+		if displayIP == "" && network != "" {
+			displayIP = "地址未知"
+		}
+		result = append(result, deviceView{ID: device.ID, Name: device.Name, DisplayName: firstNonEmpty(device.Name, defaultDeviceName(device)), Platform: device.Platform, Browser: device.Browser, Locked: device.Locked, LockedAt: device.LockedAt, CreatedAt: device.CreatedAt, LastSeen: lastSeen, LastActivity: lastActivity, IP: displayIP, Network: network, State: state, Tabs: tabs})
 	}
 	sort.SliceStable(result, func(i, j int) bool {
 		rank := func(state string) int {
