@@ -41,7 +41,6 @@ type BrowserDevice struct {
 	LastSeen      time.Time `json:"lastSeen,omitempty"`
 	LastActivity  time.Time `json:"lastActivity,omitempty"`
 	LastIP        string    `json:"ip,omitempty"`
-	NetworkHint   string    `json:"networkHint,omitempty"`
 	persistedSeen time.Time
 }
 
@@ -69,7 +68,6 @@ type deviceView struct {
 	LastSeen     time.Time `json:"lastSeen,omitempty"`
 	LastActivity time.Time `json:"lastActivity,omitempty"`
 	IP           string    `json:"ip,omitempty"`
-	Network      string    `json:"network,omitempty"`
 	State        string    `json:"state"`
 	Tabs         int       `json:"tabs"`
 }
@@ -170,7 +168,7 @@ func (s *deviceStore) gateMiddleware(next http.Handler) http.Handler {
 }
 
 func devicePathAllowedWhileLocked(path string) bool {
-	return path == "/api/v1/device/status" || path == "/api/v1/device/heartbeat" || path == "/api/v1/device/events" || path == "/api/v1/device/network-info" || path == "/api/v1/device/network-ping"
+	return path == "/api/v1/device/status" || path == "/api/v1/device/heartbeat" || path == "/api/v1/device/events"
 }
 
 func writeLockedNotFound(w http.ResponseWriter) {
@@ -224,7 +222,7 @@ func requestIP(r *http.Request) string {
 	remote := parseRequestIP(r.RemoteAddr)
 	// Forwarding headers are client-controlled unless the immediate peer is a
 	// proxy explicitly listed in LCS_TRUSTED_PROXY_CIDRS. Without this check a
-	// browser can forge an X-Forwarded-For value and change its network label.
+	// browser can forge the address displayed in the device center.
 	if remote != nil && trustedProxyIP(remote) {
 		for _, value := range []string{strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0], r.Header.Get("X-Real-IP")} {
 			if ip := net.ParseIP(strings.TrimSpace(value)); ip != nil {
@@ -232,7 +230,7 @@ func requestIP(r *http.Request) string {
 			}
 		}
 		// A trusted proxy that does not forward the client address gives us no
-		// reliable network classification. Do not report the proxy's private IP.
+		// reliable client IP. Do not report the proxy's own address.
 		return ""
 	}
 	if remote != nil {
@@ -271,24 +269,6 @@ func trustedProxyIP(ip net.IP) bool {
 	return false
 }
 
-func classifyDeviceIP(value string) string {
-	ip := net.ParseIP(strings.TrimSpace(value))
-	if ip == nil {
-		return ""
-	}
-	// A persisted address can be a known reverse-proxy/Docker gateway from an
-	// older deployment. It is infrastructure, not evidence that the browser is
-	// on the same LAN. Treat it as unknown until the next heartbeat records the
-	// real source address.
-	if trustedProxyIP(ip) {
-		return "unknown"
-	}
-	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-		return "lan"
-	}
-	return "wan"
-}
-
 func (s *deviceStore) heartbeat(id string, input heartbeatRequest, ip string) (bool, error) {
 	now := s.now()
 	platform, err := cleanDeviceLabel(input.Platform, 40)
@@ -298,10 +278,6 @@ func (s *deviceStore) heartbeat(id string, input heartbeatRequest, ip string) (b
 	browser, err := cleanDeviceLabel(input.Browser, 40)
 	if err != nil {
 		return false, err
-	}
-	networkHint := input.Network
-	if networkHint != "lan" && networkHint != "wan" {
-		networkHint = ""
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -318,13 +294,12 @@ func (s *deviceStore) heartbeat(id string, input heartbeatRequest, ip string) (b
 		s.devices[id] = device
 		persist = true
 	}
-	if device.Platform != platform || device.Browser != browser || device.LastIP != ip || device.NetworkHint != networkHint {
+	if device.Platform != platform || device.Browser != browser || device.LastIP != ip {
 		device.Platform, device.Browser = platform, browser
 		// An empty address is intentional when a trusted proxy omitted the
 		// client address. Clear an old gateway value instead of displaying it
 		// forever as if it belonged to the browser.
 		device.LastIP = ip
-		device.NetworkHint = networkHint
 		persist = true
 	}
 	if device.persistedSeen.IsZero() || now.Sub(device.persistedSeen) >= deviceSeenPersistInterval {
@@ -435,15 +410,12 @@ func (s *deviceStore) list() []deviceView {
 		if device.Locked {
 			state = "locked"
 		}
-		network := classifyDeviceIP(device.LastIP)
-		if (network == "" || network == "unknown") && device.NetworkHint != "" {
-			network = device.NetworkHint
-		}
-		displayIP := device.LastIP
-		if (network == "unknown" && (trustedProxyIP(net.ParseIP(displayIP)) || classifyDeviceIP(displayIP) == "unknown")) || (displayIP == "" && network != "") {
+		displayIP := strings.TrimSpace(device.LastIP)
+		parsedIP := net.ParseIP(displayIP)
+		if parsedIP == nil || trustedProxyIP(parsedIP) {
 			displayIP = "地址未知"
 		}
-		result = append(result, deviceView{ID: device.ID, Name: device.Name, DisplayName: firstNonEmpty(device.Name, defaultDeviceName(device)), Platform: device.Platform, Browser: device.Browser, Locked: device.Locked, LockedAt: device.LockedAt, CreatedAt: device.CreatedAt, LastSeen: lastSeen, LastActivity: lastActivity, IP: displayIP, Network: network, State: state, Tabs: tabs})
+		result = append(result, deviceView{ID: device.ID, Name: device.Name, DisplayName: firstNonEmpty(device.Name, defaultDeviceName(device)), Platform: device.Platform, Browser: device.Browser, Locked: device.Locked, LockedAt: device.LockedAt, CreatedAt: device.CreatedAt, LastSeen: lastSeen, LastActivity: lastActivity, IP: displayIP, State: state, Tabs: tabs})
 	}
 	sort.SliceStable(result, func(i, j int) bool {
 		rank := func(state string) int {
@@ -556,51 +528,9 @@ type heartbeatRequest struct {
 	SessionID string `json:"sessionId"`
 	Platform  string `json:"platform"`
 	Browser   string `json:"browser"`
-	Network   string `json:"network"`
 	Visible   bool   `json:"visible"`
 	Active    bool   `json:"active"`
 	Gone      bool   `json:"gone"`
-}
-
-func localDeviceProbeAddresses() []string {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	seen := make(map[string]struct{})
-	addresses := make([]string, 0, 2)
-	for _, iface := range interfaces {
-		// Do not advertise Docker bridge/veth addresses. They are local
-		// container infrastructure and are not LAN addresses reachable by a
-		// browser on the home network.
-		if iface.Name == "lo" || strings.HasPrefix(iface.Name, "docker") || strings.HasPrefix(iface.Name, "br-") || strings.HasPrefix(iface.Name, "veth") {
-			continue
-		}
-		values, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, value := range values {
-			var ip net.IP
-			switch address := value.(type) {
-			case *net.IPNet:
-				ip = address.IP
-			case *net.IPAddr:
-				ip = address.IP
-			}
-			if ip == nil || ip.To4() == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || !ip.IsPrivate() {
-				continue
-			}
-			text := ip.To4().String()
-			if _, ok := seen[text]; ok {
-				continue
-			}
-			seen[text] = struct{}{}
-			addresses = append(addresses, text)
-		}
-	}
-	sort.Strings(addresses)
-	return addresses
 }
 
 func decodeSmallJSON(w http.ResponseWriter, r *http.Request, value any) bool {
@@ -694,30 +624,6 @@ func registerDeviceHandlers(mux *http.ServeMux, store *deviceStore) {
 				flusher.Flush()
 			}
 		}
-	})
-
-	// Browsers cannot inspect the DNS address selected for the current page.
-	// They can, however, probe the NAS LAN addresses directly. This gives the
-	// device center the same split-DNS result as the Android client when a
-	// reverse proxy hides the source address.
-	mux.HandleFunc("/api/v1/device/network-info", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, http.StatusOK, map[string]any{"addresses": localDeviceProbeAddresses()})
-	})
-	mux.HandleFunc("/api/v1/device/network-ping", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Private-Network", "true")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("/api/v1/devices", func(w http.ResponseWriter, r *http.Request) {

@@ -1,14 +1,3 @@
-{{define "section-sort"}}
-<div class="relative section-sort" data-list="{{.}}">
-    <button type="button" class="section-sort-button flex items-center gap-2 px-3 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors" title="排序"><i class="fas fa-arrow-down-wide-short text-subtext0"></i><span class="section-sort-text font-medium text-sm text-subtext0">创建时间 ↓</span></button>
-    <div class="section-sort-menu hidden absolute top-full mt-2 right-0 min-w-40 bg-base border border-surface0 rounded-xl p-1 z-40 shadow-lg">
-        <button type="button" data-sort="created" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">创建时间</button>
-        <button type="button" data-sort="modified" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">修改时间</button>
-        <button type="button" data-sort="title" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">标题字典序</button>
-        {{if eq . "files-list"}}<button type="button" data-sort="size" class="sort-option block w-full text-left px-3 py-2 rounded-lg hover:bg-surface0 text-sm">文件大小</button>{{end}}
-    </div>
-</div>
-{{end}}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1111,7 +1100,6 @@
         let deviceActivityPending = true;
         let lastDeviceActivitySend = 0;
         let deviceLocking = false;
-        let browserNetworkHint = '';
 
         function enterDeviceLock() {
             if (deviceLocking) return;
@@ -1142,7 +1130,6 @@
                         sessionId: deviceSessionId,
                         platform: browserDeviceInfo.platform,
                         browser: browserDeviceInfo.browser,
-                        network: browserNetworkHint,
                         visible: options.gone ? false : !document.hidden,
                         active,
                         gone: options.gone === true
@@ -1158,39 +1145,6 @@
                 if (!options.gone) deviceHeartbeatBusy = false;
             }
         }
-
-        async function detectBrowserNetwork() {
-            try {
-                const response = await fetch('/api/v1/device/network-info', {cache: 'no-store', credentials: 'same-origin'});
-                if (!response.ok) return;
-                const addresses = (await response.json()).addresses || [];
-                const page = new URL(location.href);
-                const port = page.port || (page.protocol === 'https:' ? '443' : '80');
-                const probes = addresses.map(async address => {
-                    const url = `${page.protocol}//${address}:${port}/api/v1/device/network-ping?probe=${Date.now()}`;
-                    const controller = new AbortController();
-                    const timeout = setTimeout(() => controller.abort(), 3000);
-                    try {
-                        await fetch(url, {mode: 'no-cors', cache: 'no-store', signal: controller.signal});
-                        return true;
-                    } catch (_) {
-                        return false;
-                    } finally {
-                        clearTimeout(timeout);
-                    }
-                });
-                if (!probes.length) return;
-                browserNetworkHint = (await Promise.all(probes)).some(Boolean) ? 'lan' : 'wan';
-            } catch (_) {
-                // The local NAS address is unreachable, so the same hostname
-                // is being reached through the public route.
-                browserNetworkHint = 'wan';
-            }
-            const send = () => sendDeviceHeartbeat({active: false});
-            if (deviceHeartbeatBusy) setTimeout(send, 500); else send();
-        }
-
-        detectBrowserNetwork();
 
         function connectDeviceEvents() {
             if (deviceLocking) return;

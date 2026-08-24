@@ -165,38 +165,30 @@ func TestDeviceInputValidation(t *testing.T) {
 	}
 }
 
-func TestDeviceNetworkPingAllowsPrivateNetworkPreflight(t *testing.T) {
-	store := newDeviceStore(filepath.Join(t.TempDir(), "devices.json"))
-	mux := http.NewServeMux()
-	registerDeviceHandlers(mux, store)
-	request := httptest.NewRequest(http.MethodOptions, "/api/v1/device/network-ping", nil)
-	response := httptest.NewRecorder()
-	mux.ServeHTTP(response, request)
-
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("network preflight returned %d", response.Code)
-	}
-	if got := response.Header().Get("Access-Control-Allow-Private-Network"); got != "true" {
-		t.Fatalf("private-network preflight header = %q", got)
-	}
-}
-
-func TestClassifyDeviceIP(t *testing.T) {
+func TestDeviceListOnlyReturnsReliableClientIP(t *testing.T) {
 	t.Setenv("LCS_TRUSTED_PROXY_CIDRS", "192.168.32.0/20")
-	cases := map[string]string{
-		"192.168.3.20":         "lan",
-		"10.20.30.40":          "lan",
-		"127.0.0.1":            "unknown",
-		"192.168.32.1":         "unknown",
-		"::1":                  "unknown",
-		"8.8.8.8":              "wan",
-		"2001:4860:4860::8888": "wan",
-		"invalid":              "",
+	store := newDeviceStore(filepath.Join(t.TempDir(), "devices.json"))
+	id, err := randomDeviceID()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for value, want := range cases {
-		if got := classifyDeviceIP(value); got != want {
-			t.Errorf("classifyDeviceIP(%q) = %q, want %q", value, got, want)
-		}
+	store.devices[id] = &BrowserDevice{ID: id, CreatedAt: time.Now(), LastIP: "192.168.32.1"}
+	views := store.list()
+	if len(views) != 1 || views[0].IP != "地址未知" {
+		t.Fatalf("trusted proxy address leaked into device list: %#v", views)
+	}
+	data, err := json.Marshal(views[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"network"`) {
+		t.Fatalf("device view still exposes network classification: %s", data)
+	}
+
+	store.devices[id].LastIP = "203.0.113.18"
+	views = store.list()
+	if views[0].IP != "203.0.113.18" {
+		t.Fatalf("client IP was not preserved: %#v", views[0])
 	}
 }
 
