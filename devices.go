@@ -436,7 +436,7 @@ func (s *deviceStore) list() []deviceView {
 			state = "locked"
 		}
 		network := classifyDeviceIP(device.LastIP)
-		if network == "" || network == "unknown" {
+		if (network == "" || network == "unknown") && device.NetworkHint != "" {
 			network = device.NetworkHint
 		}
 		displayIP := device.LastIP
