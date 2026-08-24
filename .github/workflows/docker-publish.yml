@@ -70,31 +70,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           curl --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
-            -o desktop-raw.png \
-            http://nas.yode.ink:8084/view/a84428cd-ada0-4ec6-9eb4-24b8cbf072b0
+            -o readme-desktop.jpg \
+            http://nas.yode.ink:8084/download/files/readme-desktop.jpg
           curl --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
-            -o android-files-raw.jpg \
-            http://nas.yode.ink:8084/view/6ad8d279-1855-445a-af1a-79fde590c15e
+            -o readme-android-files.jpg \
+            http://nas.yode.ink:8084/download/files/readme-android-files.jpg
           curl --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
-            -o android-devices-raw.jpg \
-            http://nas.yode.ink:8084/view/86237f95-b60e-4bdc-ad26-c4915e1be30a
-          echo "94396d43b2f3e536a8ee27c3d3d1ab3bcb10e25ecbfd5c200b35e149addc5db1  desktop-raw.png" | sha256sum --check
-          echo "360bc9403fae864b55c3d81429272b00d2fef9d9bc165e379091a643a3db6e14  android-files-raw.jpg" | sha256sum --check
-          echo "e943dd406056c478f1b898054a23c00493512790b3d9da098854f28f1881e06f  android-devices-raw.jpg" | sha256sum --check
-          if command -v magick >/dev/null 2>&1; then
-            image_tool=magick
-          elif command -v convert >/dev/null 2>&1; then
-            image_tool=convert
-          else
-            sudo apt-get update
-            sudo apt-get install -y imagemagick
-            image_tool=convert
-          fi
-          "$image_tool" desktop-raw.png \
-            \( +clone -crop 3759x690+0+210 +repage -blur 0x22 \) \
-            -geometry +0+210 -composite -resize 1800x -strip -quality 88 readme-desktop.jpg
-          "$image_tool" android-files-raw.jpg -resize 600x -strip -quality 84 readme-android-files.jpg
-          "$image_tool" android-devices-raw.jpg -resize 600x -strip -quality 84 readme-android-devices.jpg
+            -o readme-android-devices.jpg \
+            http://nas.yode.ink:8084/download/files/readme-android-devices.jpg
           echo "2fc9ba11b94a56d87fb94f0a49a565f30c287cb5144326713addcf3af4cfa792  readme-desktop.jpg" | sha256sum --check
           echo "78191e214e524b8a217e1df626f088b2eb502e6ce48bcc189bdffce06e5277d0  readme-android-files.jpg" | sha256sum --check
           echo "c75d46db909df362cf796da6f0eefc9c6d1ce480f4f2e7a66e6f2aa732e00191  readme-android-devices.jpg" | sha256sum --check
