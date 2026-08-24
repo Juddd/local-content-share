@@ -1111,6 +1111,7 @@
         let deviceActivityPending = true;
         let lastDeviceActivitySend = 0;
         let deviceLocking = false;
+        let browserNetworkHint = '';
 
         function enterDeviceLock() {
             if (deviceLocking) return;
@@ -1141,6 +1142,7 @@
                         sessionId: deviceSessionId,
                         platform: browserDeviceInfo.platform,
                         browser: browserDeviceInfo.browser,
+                        network: browserNetworkHint,
                         visible: options.gone ? false : !document.hidden,
                         active,
                         gone: options.gone === true
@@ -1156,6 +1158,32 @@
                 if (!options.gone) deviceHeartbeatBusy = false;
             }
         }
+
+        async function detectBrowserNetwork() {
+            try {
+                const response = await fetch('/api/v1/device/network-info', {cache: 'no-store', credentials: 'same-origin'});
+                if (!response.ok) return;
+                const addresses = (await response.json()).addresses || [];
+                const page = new URL(location.href);
+                const port = page.port || (page.protocol === 'https:' ? '443' : '80');
+                const probes = addresses.map(address => {
+                    const url = `${page.protocol}//${address}:${port}/api/v1/device/network-ping?probe=${Date.now()}`;
+                    return fetch(url, {mode: 'no-cors', cache: 'no-store'}).then(() => true);
+                });
+                if (!probes.length) return;
+                if (Promise.any) await Promise.any(probes);
+                else await Promise.race(probes);
+                browserNetworkHint = 'lan';
+            } catch (_) {
+                // The local NAS address is unreachable, so the same hostname
+                // is being reached through the public route.
+                browserNetworkHint = 'wan';
+            }
+            const send = () => sendDeviceHeartbeat({active: false});
+            if (deviceHeartbeatBusy) setTimeout(send, 500); else send();
+        }
+
+        detectBrowserNetwork();
 
         function connectDeviceEvents() {
             if (deviceLocking) return;
