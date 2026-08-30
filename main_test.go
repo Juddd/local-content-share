@@ -62,6 +62,74 @@ func TestIndexUsesLocalStructuredCardInsertion(t *testing.T) {
 	}
 }
 
+func TestFileViewUsesFaviconPreviewPage(t *testing.T) {
+	raw, err := content.ReadFile("templates/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	if strings.Contains(source, `data-file-view href="/view/`) {
+		t.Fatal("server-rendered file view still bypasses the preview page")
+	}
+	if !strings.Contains(source, `data-file-view href="/preview/{{.ID}}"`) ||
+		!strings.Contains(source, "`/preview/${item.id}`") {
+		t.Fatal("both server-rendered and dynamically inserted file cards must use the preview route")
+	}
+
+	preview, err := content.ReadFile("templates/image-preview.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewSource := string(preview)
+	if !strings.Contains(previewSource, `/icon-192.png?v=app-logo-2`) {
+		t.Fatal("image preview does not declare the current app logo favicon")
+	}
+	if !strings.Contains(previewSource, `src="{{.ImageURL}}"`) {
+		t.Fatal("image preview does not load the original view URL")
+	}
+}
+
+func TestServeFilePreviewWrapsImagesAndRedirectsOtherFiles(t *testing.T) {
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	if err = os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldDir) })
+	if err = os.MkdirAll("data/files", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile("data/files/picture.png", []byte("not decoded by the wrapper"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile("data/files/notes.txt", []byte("plain text"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tmpl, err := template.New("").ParseFS(content, "templates/image-preview.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	imageResponse := httptest.NewRecorder()
+	serveFilePreview(tmpl, imageResponse, httptest.NewRequest(http.MethodGet, "/preview/files/picture.png", nil))
+	if imageResponse.Code != http.StatusOK {
+		t.Fatalf("image preview status %d: %s", imageResponse.Code, imageResponse.Body.String())
+	}
+	if !strings.Contains(imageResponse.Body.String(), `/icon-192.png?v=app-logo-2`) ||
+		!strings.Contains(imageResponse.Body.String(), `src="/view/files/picture.png"`) {
+		t.Fatalf("unexpected image preview: %s", imageResponse.Body.String())
+	}
+
+	textResponse := httptest.NewRecorder()
+	serveFilePreview(tmpl, textResponse, httptest.NewRequest(http.MethodGet, "/preview/files/notes.txt", nil))
+	if textResponse.Code != http.StatusFound || textResponse.Header().Get("Location") != "/view/files/notes.txt" {
+		t.Fatalf("non-image preview should retain native view behavior, got %d %q", textResponse.Code, textResponse.Header().Get("Location"))
+	}
+}
+
 func TestPublicDownloadURLRejectsPrivateAddresses(t *testing.T) {
 	for _, raw := range []string{"http://127.0.0.1/file", "http://localhost/file", "http://192.168.1.10/file"} {
 		if _, err := publicDownloadURL(raw); err == nil {

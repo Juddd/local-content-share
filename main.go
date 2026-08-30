@@ -47,6 +47,11 @@ type Entry struct {
 	Favorite   bool      `json:"favorite,omitempty"`
 }
 
+type imagePreviewData struct {
+	Title    string
+	ImageURL string
+}
+
 type DownloadTask struct {
 	ID       string `json:"id"`
 	Status   string `json:"status"`
@@ -171,6 +176,54 @@ func contentFilePath(id string, allowedTypes ...string) (string, error) {
 		return "", fmt.Errorf("invalid content type")
 	}
 	return filepath.Join("data", parts[0], parts[1]), nil
+}
+
+func escapedContentURL(prefix, id string) string {
+	return (&url.URL{Path: prefix + id}).String()
+}
+
+func isPreviewableImage(filePath string) bool {
+	if strings.HasPrefix(mime.TypeByExtension(strings.ToLower(filepath.Ext(filePath))), "image/") {
+		return true
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	header := make([]byte, 512)
+	count, err := file.Read(header)
+	if err != nil && err != io.EOF {
+		return false
+	}
+	return strings.HasPrefix(http.DetectContentType(header[:count]), "image/")
+}
+
+func serveFilePreview(tmpl *template.Template, w http.ResponseWriter, r *http.Request) {
+	requestedID := strings.TrimPrefix(r.URL.Path, "/preview/")
+	filePath, err := contentFilePath(requestedID, "files")
+	if err != nil {
+		http.Error(w, "Invalid file", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(filePath)
+	if err != nil || !info.Mode().IsRegular() {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	if !isPreviewableImage(filePath) {
+		http.Redirect(w, r, escapedContentURL("/view/", requestedID), http.StatusFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
+	w.Header().Set("Cache-Control", "no-cache")
+	if err := tmpl.ExecuteTemplate(w, "image-preview.html", imagePreviewData{
+		Title:    filepath.Base(filePath),
+		ImageURL: escapedContentURL("/view/", requestedID),
+	}); err != nil {
+		log.Printf("Render image preview failed: %v\n", err)
+	}
 }
 
 const thumbnailDir = "data/thumbnails"
@@ -1322,6 +1375,10 @@ func main() {
 		}
 		http.ServeFile(w, r, filePath)
 		log.Printf("Served %s for viewing\n", filename)
+	})
+
+	http.HandleFunc("/preview/", func(w http.ResponseWriter, r *http.Request) {
+		serveFilePreview(tmpl, w, r)
 	})
 
 	http.HandleFunc("/thumbnail/", func(w http.ResponseWriter, r *http.Request) {
