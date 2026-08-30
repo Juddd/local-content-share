@@ -65,25 +65,6 @@ jobs:
           else
             echo "NAS APK is unavailable; keeping the existing release asset and continuing image publication" >&2
           fi
-      - name: Upload sanitized README screenshots
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
-            -o readme-desktop.jpg \
-            http://nas.yode.ink:8084/download/files/readme-desktop.jpg
-          curl --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
-            -o readme-android-files.jpg \
-            http://nas.yode.ink:8084/download/files/readme-android-files.jpg
-          curl --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
-            -o readme-android-devices.jpg \
-            http://nas.yode.ink:8084/download/files/readme-android-devices.jpg
-          echo "2fc9ba11b94a56d87fb94f0a49a565f30c287cb5144326713addcf3af4cfa792  readme-desktop.jpg" | sha256sum --check
-          echo "78191e214e524b8a217e1df626f088b2eb502e6ce48bcc189bdffce06e5277d0  readme-android-files.jpg" | sha256sum --check
-          echo "c75d46db909df362cf796da6f0eefc9c6d1ce480f4f2e7a66e6f2aa732e00191  readme-android-devices.jpg" | sha256sum --check
-          gh release upload "$RELEASE_TAG" \
-            readme-desktop.jpg readme-android-files.jpg readme-android-devices.jpg --clobber
-
   publish-image:
     needs: test
     runs-on: ubuntu-latest
