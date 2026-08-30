@@ -266,7 +266,7 @@
                         <div class="file-card-actions flex items-center gap-0 sm:gap-1 flex-shrink-0">
                             <button onclick="event.stopPropagation(); showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="重命名"><i class="fas fa-i-cursor"></i></button>
                             <a href="/download/{{.ID}}" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="下载"><i class="fas fa-download"></i></a>
-                            <a data-file-view href="/view/{{.ID}}" target="_blank" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="查看"><i class="fas fa-eye"></i></a>
+                            <a data-file-view href="/preview/{{.ID}}" target="_blank" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="查看"><i class="fas fa-eye"></i></a>
                             <button onclick="event.stopPropagation(); copyFileUrl(this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="复制文件地址"><i class="fas fa-link"></i></button>
                             <button onclick="event.stopPropagation(); deleteItem('{{.ID}}', this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="删除"><i class="fas fa-trash"></i></button>
                         </div>
@@ -970,7 +970,7 @@
             const link = (icon,title,href) => {const a=document.createElement('a');a.className='w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline';a.title=title;a.href=href;a.innerHTML=`<i class="fas ${icon}"></i>`;return a;};
             actions.append(button('fa-i-cursor','重命名',()=>showRenameModal(item.id,item.filename)));
             const downloadLink=link('fa-download','下载',`/download/${item.id}`); downloadLink.dataset.managedDownload=''; actions.append(downloadLink);
-            const view=link('fa-eye','查看',`/view/${item.id}`);view.target='_blank';view.dataset.fileView='';actions.append(view);
+            const view=link('fa-eye','查看',`/preview/${item.id}`);view.target='_blank';view.dataset.fileView='';actions.append(view);
             actions.append(button('fa-link','复制文件地址',b=>copyFileUrl(b)));
             actions.append(button('fa-trash','删除',b=>deleteItem(item.id,b)));
             row.append(info, actions);
