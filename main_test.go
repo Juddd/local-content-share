@@ -62,6 +62,26 @@ func TestIndexUsesLocalStructuredCardInsertion(t *testing.T) {
 	}
 }
 
+func TestSnippetSearchFiltersExistingAndRealtimeCards(t *testing.T) {
+	raw, err := content.ReadFile("templates/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	for _, marker := range []string{
+		`id="snippet-search-toggle"`,
+		`id="snippet-search-input"`,
+		`function applySnippetSearch()`,
+		`row.querySelector('[data-snippet-full]')`,
+		`if(item.type==='text') applySnippetSearch()`,
+		`animateCardOut(card).then(applySnippetSearch)`,
+	} {
+		if !strings.Contains(source, marker) {
+			t.Fatalf("snippet search integration is missing %q", marker)
+		}
+	}
+}
+
 func TestFileViewUsesFaviconPreviewPage(t *testing.T) {
 	raw, err := content.ReadFile("templates/index.html")
 	if err != nil {

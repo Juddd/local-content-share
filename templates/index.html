@@ -231,8 +231,19 @@
             </section>
 
             <!-- Snippets Section -->
-            <section class="content-section">
-                <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">文字</h2>{{template "section-sort" "snippets-list"}}</div>
+            <section class="content-section relative">
+                <div class="flex items-center justify-center gap-3 mb-4">
+                    <h2 class="text-2xl font-semibold text-text">文字</h2>
+                    {{template "section-sort" "snippets-list"}}
+                    <button id="snippet-search-toggle" type="button" class="absolute right-0 top-0 w-10 h-10 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full shadow-sm transition-colors" title="搜索文字" aria-label="搜索文字"><i class="fas fa-magnifying-glass"></i></button>
+                </div>
+                <div id="snippet-search-panel" class="hidden max-w-2xl mx-auto mb-4 items-center gap-2 bg-base border border-surface0 rounded-2xl px-3 py-2 shadow-sm">
+                    <i class="fas fa-magnifying-glass text-overlay1" aria-hidden="true"></i>
+                    <input id="snippet-search-input" type="search" autocomplete="off" enterkeyhint="search" placeholder="搜索标题和正文" class="min-w-0 flex-1 bg-transparent text-text placeholder:text-overlay1 focus:outline-none" aria-label="搜索文字标题和正文">
+                    <span id="snippet-search-count" class="text-xs text-overlay1 whitespace-nowrap" aria-live="polite"></span>
+                    <button id="snippet-search-clear" type="button" class="hidden w-8 h-8 items-center justify-center hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="清空搜索" aria-label="清空搜索"><i class="fas fa-eraser"></i></button>
+                    <button id="snippet-search-close" type="button" class="w-8 h-8 flex items-center justify-center hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="关闭搜索" aria-label="关闭搜索"><i class="fas fa-xmark"></i></button>
+                </div>
                 <div id="snippets-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "text"}}
                     <div data-snippet-row data-snippet-id="{{.ID}}" data-revision="{{.Revision}}" data-favorite="{{if .Favorite}}1{{else}}0{{end}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
@@ -251,6 +262,7 @@
                     </div>
                     {{end}}{{end}}
                 </div>
+                <div id="snippet-search-empty" class="hidden py-10 text-center text-subtext0">没有找到匹配的文字</div>
             </section>
 
             <!-- Files Section -->
@@ -471,6 +483,81 @@
             });
         }
 
+        let snippetSearchOpen = false;
+        let snippetSearchQuery = '';
+
+        function normalizeSnippetSearch(value) {
+            const text = String(value || '');
+            return (text.normalize ? text.normalize('NFKC') : text).toLocaleLowerCase().trim();
+        }
+
+        function applySnippetSearch() {
+            const list = document.getElementById('snippets-list');
+            if (!list) return;
+            const terms = normalizeSnippetSearch(snippetSearchQuery).split(/\s+/).filter(Boolean);
+            let matches = 0;
+            const rows = Array.from(list.querySelectorAll('[data-snippet-row]'));
+            rows.forEach(row => {
+                const title = row.dataset.title || '';
+                const content = row.querySelector('[data-snippet-full]')?.textContent || '';
+                const haystack = normalizeSnippetSearch(`${title}\n${content}`);
+                const matched = terms.every(term => haystack.includes(term));
+                row.hidden = !matched;
+                if (matched) matches++;
+            });
+            const count = document.getElementById('snippet-search-count');
+            const clear = document.getElementById('snippet-search-clear');
+            const empty = document.getElementById('snippet-search-empty');
+            if (count) count.textContent = terms.length ? `${matches} 条` : '';
+            if (clear) clear.classList.toggle('hidden', !terms.length);
+            if (clear) clear.classList.toggle('flex', Boolean(terms.length));
+            if (empty) empty.classList.toggle('hidden', !terms.length || matches > 0);
+        }
+
+        function initializeSnippetSearch() {
+            const toggle = document.getElementById('snippet-search-toggle');
+            const panel = document.getElementById('snippet-search-panel');
+            const input = document.getElementById('snippet-search-input');
+            const clear = document.getElementById('snippet-search-clear');
+            const close = document.getElementById('snippet-search-close');
+            if (!toggle || !panel || !input || toggle.dataset.initialized === '1') return;
+            toggle.dataset.initialized = '1';
+            input.value = snippetSearchQuery;
+            panel.classList.toggle('hidden', !snippetSearchOpen);
+            panel.classList.toggle('flex', snippetSearchOpen);
+            toggle.classList.toggle('hidden', snippetSearchOpen);
+            toggle.addEventListener('click', () => {
+                snippetSearchOpen = true;
+                panel.classList.remove('hidden');
+                panel.classList.add('flex');
+                toggle.classList.add('hidden');
+                input.focus();
+            });
+            input.addEventListener('input', () => {
+                snippetSearchQuery = input.value;
+                applySnippetSearch();
+            });
+            input.addEventListener('keydown', event => {
+                if (event.key === 'Escape') close.click();
+            });
+            clear.addEventListener('click', () => {
+                snippetSearchQuery = '';
+                input.value = '';
+                applySnippetSearch();
+                input.focus();
+            });
+            close.addEventListener('click', () => {
+                snippetSearchOpen = false;
+                snippetSearchQuery = '';
+                input.value = '';
+                panel.classList.add('hidden');
+                panel.classList.remove('flex');
+                toggle.classList.remove('hidden');
+                applySnippetSearch();
+            });
+            applySnippetSearch();
+        }
+
         function closeSettingsModal() { settingsModal.classList.add('hidden'); }
         settingsButton.addEventListener('click', () => {
             snippetPreviewLimitInput.value = getSnippetPreviewLimit();
@@ -494,6 +581,7 @@
             if (event.key === 'Enter') settingsSaveButton.click();
         });
         renderSnippetPreviews();
+        initializeSnippetSearch();
 
         // Reset the New Item modal
         function closeAndResetNewItemModal() {
@@ -845,7 +933,7 @@
             fetch(`/delete/${id}`, { method: 'POST', body:new URLSearchParams({expectedRevision:row?.dataset.revision||''}) })
             .then(async response => {
                 if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
-                if (row) await animateCardOut(row);
+                if (row) { await animateCardOut(row); applySnippetSearch(); }
                 else await refreshContentSections();
             })
             .catch(error => {
@@ -897,7 +985,7 @@
 
         // New form submission with progress
         const newItemForm = document.getElementById('new-item-form');
-        async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const snapshot=Number(response.headers.get('X-Content-Sequence'));const html=await response.text();if(Number.isFinite(snapshot)&&lastEventSequence!==null&&lastEventSequence>snapshot){setTimeout(()=>refreshContentSections().catch(()=>{}),150);return;}const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});if(Number.isFinite(snapshot))lastEventSequence=Math.max(lastEventSequence??-1,snapshot);initializeSortControls();renderSnippetPreviews();}
+        async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const snapshot=Number(response.headers.get('X-Content-Sequence'));const html=await response.text();if(Number.isFinite(snapshot)&&lastEventSequence!==null&&lastEventSequence>snapshot){setTimeout(()=>refreshContentSections().catch(()=>{}),150);return;}const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});if(Number.isFinite(snapshot))lastEventSequence=Math.max(lastEventSequence??-1,snapshot);initializeSortControls();renderSnippetPreviews();initializeSnippetSearch();}
 
         function actionButton(icon,title,handler){const button=document.createElement('button');button.className='w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors';button.title=title;button.innerHTML=`<i class="${icon}"></i>`;button.onclick=event=>{event.stopPropagation();handler(button);};return button;}
         function itemUnix(value){const parsed=Date.parse(value);return Number.isFinite(parsed)?Math.floor(parsed/1000):Math.floor(Date.now()/1000);}
@@ -925,6 +1013,7 @@
             }
             applyListSort(item.type==='text'?'snippets-list':'links-list',true);
             renderSnippetPreviews();
+            if(item.type==='text') applySnippetSearch();
         }
 
         async function submitNewCard(form, onSuccess) {
@@ -1207,7 +1296,7 @@
                         lastEventSequence = change.sequence;
                         if (change.type === 'deleted' && change.id) {
                             const card = eventCard(change.id);
-                            if (card) animateCardOut(card);
+                            if (card) animateCardOut(card).then(applySnippetSearch);
                             else refreshContentSections().catch(()=>{});
                             return;
                         }
