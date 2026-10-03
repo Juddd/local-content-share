@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 package main
 
 import (
@@ -19,8 +20,9 @@ import (
 
 func TestIndexTemplateRendersDocument(t *testing.T) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"previewText": func(s string, max int) string { return s },
-		"isTruncated": func(s string, max int) bool { return false },
+		"previewText":  func(s string, max int) string { return s },
+		"isTruncated":  func(s string, max int) bool { return false },
+		"safeLinkHref": safeLinkHref,
 	}).ParseFS(content, "templates/*.html")
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +33,25 @@ func TestIndexTemplateRendersDocument(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "<!DOCTYPE html>") {
 		t.Fatalf("index template rendered %d bytes without a document", output.Len())
+	}
+}
+
+func TestIndexTemplatePreservesCustomLinkHref(t *testing.T) {
+	tmpl, err := template.New("").Funcs(template.FuncMap{
+		"previewText":  func(s string, max int) string { return s },
+		"isTruncated":  func(s string, max int) bool { return false },
+		"safeLinkHref": safeLinkHref,
+	}).ParseFS(content, "templates/*.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	entry := Entry{ID: "link/magnet", Type: "link", Filename: "磁力", Content: "magnet:?xt=urn:btih:test"}
+	if err = tmpl.ExecuteTemplate(&output, "index.html", []Entry{entry}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `href="magnet:?xt=urn:btih:test"`) {
+		t.Fatalf("custom link scheme was not preserved in href: %s", output.String())
 	}
 }
 
@@ -155,6 +176,47 @@ func TestPublicDownloadURLRejectsPrivateAddresses(t *testing.T) {
 		if _, err := publicDownloadURL(raw); err == nil {
 			t.Fatalf("expected private URL to be rejected: %s", raw)
 		}
+	}
+}
+
+func TestValidateLinkURIAcceptsCustomSchemes(t *testing.T) {
+	for _, raw := range []string{
+		"http://example.com/path",
+		"https://example.com/path?q=1",
+		"magnet:?xt=urn:btih:41288d2f4db99308c73edcb99489308937f8bfef",
+		"thunder://QUFlZDJrOi8vZmlsZQ==",
+		"ed2k://|file|example.iso|123|hash|/",
+		"mailto:user@example.com",
+		"ftp://example.com/file.zip",
+	} {
+		if err := validateLinkURI(raw); err != nil {
+			t.Fatalf("expected link URI to be accepted: %q: %v", raw, err)
+		}
+	}
+}
+
+func TestValidateLinkURIRejectsUnsafeOrMalformedSchemes(t *testing.T) {
+	for _, raw := range []string{
+		"",
+		"example.com/no-scheme",
+		"javascript:alert(1)",
+		"vbscript:msgbox(1)",
+		"data:text/html,<script>alert(1)</script>",
+		"1invalid:value",
+		"magnet:?xt=urn:btih:\ninvalid",
+	} {
+		if err := validateLinkURI(raw); err == nil {
+			t.Fatalf("expected link URI to be rejected: %q", raw)
+		}
+	}
+}
+
+func TestSafeLinkHrefPreservesCustomSchemes(t *testing.T) {
+	if got := string(safeLinkHref("magnet:?xt=urn:btih:test")); got != "magnet:?xt=urn:btih:test" {
+		t.Fatalf("custom scheme was not preserved: %q", got)
+	}
+	if got := string(safeLinkHref("javascript:alert(1)")); got != "#" {
+		t.Fatalf("unsafe scheme was not neutralized: %q", got)
 	}
 }
 

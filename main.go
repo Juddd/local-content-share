@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 package main
 
 import (
@@ -29,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 //go:embed templates/* static/*
@@ -453,6 +455,44 @@ func (t *ExpirationTracker) CleanupExpired() []string {
 
 var listenAddress = flag.String("listen", ":8080", "host:port in which the server will listen")
 
+var linkSchemePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*$`)
+
+// validateLinkURI accepts any RFC 3986 URI scheme that a client may handle,
+// while excluding schemes that would execute content when rendered as a link.
+func validateLinkURI(raw string) error {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return errors.New("link cannot be empty")
+	}
+	if strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+		return errors.New("link cannot contain whitespace")
+	}
+	schemeEnd := strings.IndexByte(value, ':')
+	if schemeEnd <= 0 || !linkSchemePattern.MatchString(value[:schemeEnd]) {
+		return errors.New("invalid link URI: include a valid scheme such as http, magnet or thunder")
+	}
+	scheme := strings.ToLower(value[:schemeEnd])
+	switch scheme {
+	case "javascript", "vbscript", "data":
+		return errors.New("this link scheme is not allowed")
+	}
+	// Standard URL schemes should still pass Go's URI parser. Legacy clients
+	// commonly emit custom opaque links such as ed2k://|file|...|, so those
+	// are accepted after the scheme and whitespace checks above.
+	if _, err := url.ParseRequestURI(value); err != nil && (scheme == "http" || scheme == "https" || scheme == "ftp") {
+		return errors.New("invalid link URI: include a valid scheme such as http, magnet or thunder")
+	}
+	return nil
+}
+
+func safeLinkHref(raw string) template.URL {
+	value := strings.TrimSpace(raw)
+	if err := validateLinkURI(value); err != nil {
+		return template.URL("#")
+	}
+	return template.URL(value)
+}
+
 // Placeholder content for notepad files
 const mdPlaceholder = `# Welcome to Markdown Notepad
 
@@ -615,6 +655,7 @@ func main() {
 		"isTruncated": func(s string, max int) bool {
 			return len([]rune(s)) > max
 		},
+		"safeLinkHref": safeLinkHref,
 	}
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(content, "templates/*.html"))
 	registerDeviceHandlers(http.DefaultServeMux, browserDevices)
@@ -951,13 +992,9 @@ func main() {
 		var createdItems []*Entry
 		if entryType == "link" {
 			// Handle link submission
-			if content == "" {
-				http.Error(w, "URL content cannot be empty", http.StatusBadRequest)
-				return
-			}
-			u, err := url.ParseRequestURI(content)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-				http.Error(w, "Invalid URL format. Must start with http:// or https://", http.StatusBadRequest)
+			content = strings.TrimSpace(content)
+			if err := validateLinkURI(content); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			linksFilePath := filepath.Join("data", "links.file")

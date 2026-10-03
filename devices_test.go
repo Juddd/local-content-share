@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 package main
 
 import (
@@ -121,6 +122,7 @@ func TestDeviceCookieSharedSessionsAndPersistentLock(t *testing.T) {
 	}
 
 	reloaded := newDeviceStore(path)
+	reloaded.now = func() time.Time { return fixedNow }
 	if !reloaded.isLocked(cookie.Value) || reloaded.list()[0].DisplayName != "书房电脑" {
 		t.Fatalf("lock or device name did not survive reload: %#v", reloaded.list())
 	}

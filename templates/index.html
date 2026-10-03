@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 {{define "section-sort"}}
 <div class="relative section-sort" data-list="{{.}}">
     <button type="button" class="section-sort-button flex items-center gap-2 px-3 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors" title="排序"><i class="fas fa-arrow-down-wide-short text-subtext0"></i><span class="section-sort-text font-medium text-sm text-subtext0">创建时间 ↓</span></button>
@@ -299,7 +300,7 @@
                             </div>
                             <div class="link-card-actions flex items-center gap-0 sm:gap-1 flex-shrink-0">
                                 <button onclick="showRenameModal('{{.ID}}', '{{.Filename}}')" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Rename"><i class="fas fa-i-cursor"></i></button>
-                                <a href="{{.Content}}" target="_blank" rel="noopener noreferrer" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="在新标签页打开"><i class="fas fa-arrow-up-right-from-square"></i></a>
+                                <a href="{{safeLinkHref .Content}}" target="_blank" rel="noopener noreferrer" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline" title="在新标签页打开"><i class="fas fa-arrow-up-right-from-square"></i></a>
                                 <button onclick="copyToClipboard(this.closest('[data-link-row]').querySelector('[data-link-url]').textContent, this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Copy"><i class="fas fa-copy"></i></button>
                                 <button onclick="deleteItem('{{.ID}}', this)" class="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors" title="Delete"><i class="fas fa-trash"></i></button>
                             </div>
@@ -373,7 +374,8 @@
             <form id="new-link-form" action="/submit" method="POST" enctype="multipart/form-data">
                 <input type="hidden" name="type" value="link">
                 <input type="text" name="name" required placeholder="Title" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl mb-3">
-                <input type="url" name="content" required placeholder="https://example.com" class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl mb-6">
+                <input type="text" inputmode="url" name="content" required placeholder="https://example.com、magnet:?xt=...、thunder://..." class="w-full bg-base px-4 py-3 text-text placeholder-overlay1 focus:outline-none rounded-2xl mb-2">
+                <p class="text-xs text-subtext0 mb-6">支持 HTTP、HTTPS、磁力链接、迅雷链接及其它带协议的 URI</p>
                 <div class="flex justify-end gap-4">
                     <button type="button" id="link-cancel-button" class="px-4 py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium">取消</button>
                     <button type="submit" class="px-4 py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors">提交</button>
@@ -987,6 +989,7 @@
         const newItemForm = document.getElementById('new-item-form');
         async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const snapshot=Number(response.headers.get('X-Content-Sequence'));const html=await response.text();if(Number.isFinite(snapshot)&&lastEventSequence!==null&&lastEventSequence>snapshot){setTimeout(()=>refreshContentSections().catch(()=>{}),150);return;}const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});if(Number.isFinite(snapshot))lastEventSequence=Math.max(lastEventSequence??-1,snapshot);initializeSortControls();renderSnippetPreviews();initializeSnippetSearch();}
 
+        function safeLinkHref(value){const raw=String(value||'').trim();const match=raw.match(/^([A-Za-z][A-Za-z0-9+.-]*):/);if(!match||/^(javascript|vbscript|data)$/i.test(match[1]))return '#';return raw;}
         function actionButton(icon,title,handler){const button=document.createElement('button');button.className='w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors';button.title=title;button.innerHTML=`<i class="${icon}"></i>`;button.onclick=event=>{event.stopPropagation();handler(button);};return button;}
         function itemUnix(value){const parsed=Date.parse(value);return Number.isFinite(parsed)?Math.floor(parsed/1000):Math.floor(Date.now()/1000);}
         function createSnippetCard(item){
@@ -999,7 +1002,7 @@
         function createLinkCard(item){
             const row=document.createElement('div');row.dataset.linkRow='';row.dataset.linkId=item.id;row.dataset.revision=item.revision||0;row.dataset.created=itemUnix(item.createdAt);row.dataset.modified=itemUnix(item.modifiedAt);row.dataset.title=item.filename||'';row.className='link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300';
             const info=document.createElement('div');info.className='min-w-0 flex-1';const title=document.createElement('div');title.className='link-card-name font-semibold text-text mb-1';title.title=item.filename||'';title.textContent=item.filename||'';const url=document.createElement('div');url.dataset.linkUrl='';url.className='text-subtext0 break-all';url.textContent=item.content||'';info.append(title,url);
-            const actions=document.createElement('div');actions.className='link-card-actions flex items-center gap-0 sm:gap-1 flex-shrink-0';actions.append(actionButton('fas fa-i-cursor','重命名',()=>showRenameModal(item.id,item.filename)));const open=document.createElement('a');open.href=item.content||'';open.target='_blank';open.rel='noopener noreferrer';open.title='在新标签页打开';open.className='w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline';open.innerHTML='<i class="fas fa-arrow-up-right-from-square"></i>';actions.append(open,actionButton('fas fa-copy','复制',button=>copyToClipboard(item.content||'',button)),actionButton('fas fa-trash','删除',button=>deleteItem(item.id,button)));row.append(info,actions);return row;
+            const actions=document.createElement('div');actions.className='link-card-actions flex items-center gap-0 sm:gap-1 flex-shrink-0';actions.append(actionButton('fas fa-i-cursor','重命名',()=>showRenameModal(item.id,item.filename)));const open=document.createElement('a');open.href=safeLinkHref(item.content);open.target='_blank';open.rel='noopener noreferrer';open.title='在新标签页打开';open.className='w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors no-underline';open.innerHTML='<i class="fas fa-arrow-up-right-from-square"></i>';if(open.href.endsWith('#'))open.onclick=event=>event.preventDefault();actions.append(open,actionButton('fas fa-copy','复制',button=>copyToClipboard(item.content||'',button)),actionButton('fas fa-trash','删除',button=>deleteItem(item.id,button)));row.append(info,actions);return row;
         }
         async function insertRenderedCard(item) {
             if (!item || !item.type) throw new Error('服务器未返回新卡片');
