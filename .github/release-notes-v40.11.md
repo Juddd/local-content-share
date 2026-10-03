@@ -1,4 +1,3 @@
-warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 # Local Content Share v40.11
 
 - 链接区不再限制为 `http://` 或 `https://` 开头。
