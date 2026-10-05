@@ -94,6 +94,8 @@ func TestSnippetTemplateIncludesCategoryControls(t *testing.T) {
 		`data-private=`,
 		`togglePrivate`,
 		`/private/`,
+		`添加时间：{{.CreatedAt.Format "2006-01-02 15:04:05"}}`,
+		`createdAtTitle`,
 	} {
 		if !strings.Contains(source, marker) {
 			t.Fatalf("snippet category integration is missing %q", marker)
