@@ -37,6 +37,7 @@ func stableEntry(entry *Entry) *Entry {
 	entry.CreatedAt = snapshot.CreatedAt
 	entry.ModifiedAt = snapshot.ModifiedAt
 	entry.Favorite = snapshot.Favorite
+	entry.Private = snapshot.Private
 	return entry
 }
 

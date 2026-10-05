@@ -46,6 +46,7 @@ type Entry struct {
 	ModifiedAt time.Time `json:"modifiedAt"`
 	Size       int64     `json:"size"`
 	Favorite   bool      `json:"favorite,omitempty"`
+	Private    bool      `json:"private,omitempty"`
 }
 
 type imagePreviewData struct {
@@ -1573,6 +1574,49 @@ func main() {
 				return
 			}
 			http.Error(w, mutationErr.Error(), 500)
+			return
+		}
+		entry, err := contentEntry(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		notifyContentItem("updated", entry)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "item": entry})
+	})
+
+	http.HandleFunc("/private/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		requestedID := strings.TrimPrefix(r.URL.Path, "/private/")
+		id := resolveStorageID(requestedID)
+		if record, ok := contentLifecycle.Resolve(requestedID); ok && expectedRevision(r) > 0 && record.Revision != expectedRevision(r) {
+			writeRevisionConflict(w, record)
+			return
+		}
+		if _, err := contentFilePath(id, "text"); err != nil {
+			http.Error(w, "Can only classify text snippets", http.StatusBadRequest)
+			return
+		}
+		if _, err := os.Stat(filepath.Join("data", filepath.FromSlash(id))); err != nil {
+			http.Error(w, "Snippet not found", http.StatusNotFound)
+			return
+		}
+		raw := r.FormValue("private")
+		if raw != "true" && raw != "false" && raw != "1" && raw != "0" {
+			http.Error(w, "private must be true or false", http.StatusBadRequest)
+			return
+		}
+		value := raw == "true" || raw == "1"
+		record, mutationErr := contentLifecycle.SetPrivate(requestedID, value, expectedRevision(r))
+		if mutationErr != nil {
+			if errors.Is(mutationErr, errRevisionConflict) {
+				writeRevisionConflict(w, record)
+				return
+			}
+			http.Error(w, mutationErr.Error(), http.StatusInternalServerError)
 			return
 		}
 		entry, err := contentEntry(id)

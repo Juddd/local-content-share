@@ -34,12 +34,14 @@ type Snapshot struct {
 	Identity
 	Times
 	Favorite bool
+	Private  bool
 }
 
 type state struct {
 	ByID      map[string]*Identity `json:"byId"`
 	ByStorage map[string]string    `json:"byStorage"`
 	Favorites map[string]bool      `json:"favorites"`
+	Private   map[string]bool      `json:"private"`
 	Times     map[string]Times     `json:"times"`
 }
 
@@ -55,7 +57,7 @@ type Manager struct {
 
 func NewManager(root string) (*Manager, error) {
 	m := &Manager{path: filepath.Join(root, "content-state.json"), now: time.Now}
-	m.data = state{ByID: map[string]*Identity{}, ByStorage: map[string]string{}, Favorites: map[string]bool{}, Times: map[string]Times{}}
+	m.data = state{ByID: map[string]*Identity{}, ByStorage: map[string]string{}, Favorites: map[string]bool{}, Private: map[string]bool{}, Times: map[string]Times{}}
 	if data, err := os.ReadFile(m.path); err == nil {
 		if err := json.Unmarshal(data, &m.data); err != nil {
 			return nil, err
@@ -78,6 +80,9 @@ func (m *Manager) ensureMaps() {
 	}
 	if m.data.Favorites == nil {
 		m.data.Favorites = map[string]bool{}
+	}
+	if m.data.Private == nil {
+		m.data.Private = map[string]bool{}
 	}
 	if m.data.Times == nil {
 		m.data.Times = map[string]Times{}
@@ -110,7 +115,7 @@ func (m *Manager) migrateLegacy(root string) error {
 		m.data.Times = times.Items
 	}
 	m.ensureMaps()
-	if len(m.data.ByID)+len(m.data.Favorites)+len(m.data.Times) > 0 {
+	if len(m.data.ByID)+len(m.data.Favorites)+len(m.data.Private)+len(m.data.Times) > 0 {
 		return m.saveLocked()
 	}
 	return nil
@@ -127,10 +132,11 @@ func (m *Manager) View(storage string, fallback time.Time) Snapshot {
 		changed = true
 	}
 	favorite := m.data.Favorites[storage]
+	private := m.data.Private[storage]
 	if changed {
 		_ = m.saveLocked()
 	}
-	return Snapshot{Identity: record, Times: times, Favorite: favorite}
+	return Snapshot{Identity: record, Times: times, Favorite: favorite, Private: private}
 }
 
 func (m *Manager) Add(storage, preferredID string) (Identity, error) {
@@ -188,6 +194,10 @@ func (m *Manager) Rename(value, newStorage string, expected uint64) (Identity, e
 			delete(m.data.Favorites, oldStorage)
 			m.data.Favorites[newStorage] = true
 		}
+		if m.data.Private[oldStorage] {
+			delete(m.data.Private, oldStorage)
+			m.data.Private[newStorage] = true
+		}
 	}
 	record.Revision++
 	return *record, m.saveMutationLocked(previous)
@@ -236,6 +246,27 @@ func (m *Manager) SetFavorite(value string, favorite bool, expected uint64) (Ide
 	return *record, m.saveMutationLocked(previous)
 }
 
+func (m *Manager) SetPrivate(value string, private bool, expected uint64) (Identity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record, ok := m.resolvePointerLocked(value)
+	if !ok {
+		return Identity{}, fmt.Errorf("identity not found")
+	}
+	if expected > 0 && expected != record.Revision {
+		return *record, ErrRevisionConflict
+	}
+	previous := m.beginMutationLocked()
+	record, _ = m.resolvePointerLocked(value)
+	if private {
+		m.data.Private[record.Storage] = true
+	} else {
+		delete(m.data.Private, record.Storage)
+	}
+	record.Revision++
+	return *record, m.saveMutationLocked(previous)
+}
+
 func (m *Manager) Remove(value string, expected uint64) (Identity, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -253,6 +284,7 @@ func (m *Manager) Remove(value string, expected uint64) (Identity, error) {
 	delete(m.data.ByID, record.ID)
 	delete(m.data.ByStorage, record.Storage)
 	delete(m.data.Favorites, record.Storage)
+	delete(m.data.Private, record.Storage)
 	delete(m.data.Times, record.Storage)
 	return removed, m.saveMutationLocked(previous)
 }
@@ -285,6 +317,10 @@ func (m *Manager) MigrateLegacyStorage(oldStorage, newStorage string) error {
 		delete(m.data.Favorites, oldStorage)
 		m.data.Favorites[newStorage] = true
 	}
+	if m.data.Private[oldStorage] {
+		delete(m.data.Private, oldStorage)
+		m.data.Private[newStorage] = true
+	}
 	return m.saveMutationLocked(previous)
 }
 
@@ -303,7 +339,7 @@ func (m *Manager) saveMutationLocked(previous state) error {
 }
 
 func cloneState(source state) state {
-	copy := state{ByID: make(map[string]*Identity, len(source.ByID)), ByStorage: make(map[string]string, len(source.ByStorage)), Favorites: make(map[string]bool, len(source.Favorites)), Times: make(map[string]Times, len(source.Times))}
+	copy := state{ByID: make(map[string]*Identity, len(source.ByID)), ByStorage: make(map[string]string, len(source.ByStorage)), Favorites: make(map[string]bool, len(source.Favorites)), Private: make(map[string]bool, len(source.Private)), Times: make(map[string]Times, len(source.Times))}
 	for id, identity := range source.ByID {
 		if identity != nil {
 			value := *identity
@@ -315,6 +351,9 @@ func cloneState(source state) state {
 	}
 	for storage, favorite := range source.Favorites {
 		copy.Favorites[storage] = favorite
+	}
+	for storage, private := range source.Private {
+		copy.Private[storage] = private
 	}
 	for storage, times := range source.Times {
 		copy.Times[storage] = times

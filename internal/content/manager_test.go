@@ -74,13 +74,17 @@ func TestContentRenameAndDeleteMoveAllMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	record, err = manager.SetPrivate(record.ID, true, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	record, err = manager.Rename(record.ID, "text/two", record.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot := manager.View("text/two", time.Time{})
-	if !snapshot.Favorite {
-		t.Fatal("favorite was not migrated")
+	if !snapshot.Favorite || !snapshot.Private {
+		t.Fatal("item metadata was not migrated")
 	}
 	if _, ok := manager.Resolve("text/one"); ok {
 		t.Fatal("old storage remains")
@@ -91,6 +95,29 @@ func TestContentRenameAndDeleteMoveAllMetadata(t *testing.T) {
 	reloaded, _ := NewManager(root)
 	if _, ok := reloaded.Resolve(record.ID); ok {
 		t.Fatal("identity was not removed")
+	}
+}
+
+func TestContentPrivateStateSurvivesRestartAndRevisionChecks(t *testing.T) {
+	root := t.TempDir()
+	manager, _ := NewManager(root)
+	record, _ := manager.Add("text/private", "")
+	updated, err := manager.SetPrivate(record.ID, true, record.Revision)
+	if err != nil || updated.Revision != record.Revision+1 {
+		t.Fatalf("private state was not committed: %#v %v", updated, err)
+	}
+	if snapshot := manager.View("text/private", time.Time{}); !snapshot.Private {
+		t.Fatal("private state was not visible")
+	}
+	if _, err := manager.SetPrivate(record.ID, false, record.Revision); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("stale private mutation was accepted: %v", err)
+	}
+	reloaded, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := reloaded.View("text/private", time.Time{}); !snapshot.Private {
+		t.Fatal("private state was not persisted")
 	}
 }
 

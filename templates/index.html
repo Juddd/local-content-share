@@ -237,6 +237,10 @@
                     {{template "section-sort" "snippets-list"}}
                     <button id="snippet-search-toggle" type="button" class="absolute right-0 top-0 w-10 h-10 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full shadow-sm transition-colors" title="搜索文字" aria-label="搜索文字"><i class="fas fa-magnifying-glass"></i></button>
                 </div>
+                <div id="snippet-category-filter" class="flex items-center justify-center gap-1 mb-4" role="tablist" aria-label="文字分类">
+                    <button type="button" data-snippet-category="normal" class="snippet-category-button px-4 py-1.5 rounded-full text-sm font-medium transition-colors" role="tab">普通</button>
+                    <button type="button" data-snippet-category="private" class="snippet-category-button px-4 py-1.5 rounded-full text-sm font-medium transition-colors" role="tab">私</button>
+                </div>
                 <div id="snippet-search-panel" class="hidden max-w-2xl mx-auto mb-4 items-center gap-2 bg-base border border-surface0 rounded-2xl px-3 py-2 shadow-sm">
                     <i class="fas fa-magnifying-glass text-overlay1" aria-hidden="true"></i>
                     <input id="snippet-search-input" type="search" autocomplete="off" enterkeyhint="search" placeholder="搜索标题和正文" class="min-w-0 flex-1 bg-transparent text-text placeholder:text-overlay1 focus:outline-none" aria-label="搜索文字标题和正文">
@@ -246,7 +250,7 @@
                 </div>
                 <div id="snippets-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "text"}}
-                    <div data-snippet-row data-snippet-id="{{.ID}}" data-revision="{{.Revision}}" data-favorite="{{if .Favorite}}1{{else}}0{{end}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
+                    <div data-snippet-row data-snippet-id="{{.ID}}" data-revision="{{.Revision}}" data-favorite="{{if .Favorite}}1{{else}}0{{end}}" data-private="{{if .Private}}1{{else}}0{{end}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" class="bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative">
                         <div class="flex items-start justify-between gap-2 mb-2">
                             <div class="font-semibold text-text break-all min-w-0">{{.Filename}}</div>
                             <div class="flex items-center gap-0 sm:gap-1 flex-shrink-0">
@@ -258,7 +262,10 @@
                         </div>
                         <div data-snippet-content class="w-full whitespace-pre-wrap break-all text-subtext0">{{previewText .Content 600}}{{if isTruncated .Content 600}}… <span class="text-blue text-sm whitespace-nowrap">点击查看全文</span>{{end}}</div>
                         <div data-snippet-full class="hidden">{{.Content}}</div>
-                        <button onclick="event.stopPropagation(); toggleFavorite('{{.ID}}', this)" class="absolute right-3 bottom-2 w-8 h-8 flex items-center justify-center hover:bg-surface0 {{if .Favorite}}text-yellow{{else}}text-overlay1{{end}} rounded-full transition-colors" title="{{if .Favorite}}取消收藏{{else}}收藏{{end}}"><i class="{{if .Favorite}}fas{{else}}far{{end}} fa-star"></i></button>
+                        <div class="absolute right-3 bottom-2 flex items-center gap-0">
+                            <button onclick="event.stopPropagation(); togglePrivate('{{.ID}}', this)" class="w-8 h-8 flex items-center justify-center hover:bg-surface0 {{if .Private}}text-teal{{else}}text-overlay1{{end}} rounded-full transition-colors" title="{{if .Private}}移到普通{{else}}移到私{{end}}"><i class="fas {{if .Private}}fa-lock{{else}}fa-lock-open{{end}}"></i></button>
+                            <button onclick="event.stopPropagation(); toggleFavorite('{{.ID}}', this)" class="w-8 h-8 flex items-center justify-center hover:bg-surface0 {{if .Favorite}}text-yellow{{else}}text-overlay1{{end}} rounded-full transition-colors" title="{{if .Favorite}}取消收藏{{else}}收藏{{end}}"><i class="{{if .Favorite}}fas{{else}}far{{end}} fa-star"></i></button>
+                        </div>
                     </div>
                     {{end}}{{end}}
                 </div>
@@ -486,6 +493,7 @@
 
         let snippetSearchOpen = false;
         let snippetSearchQuery = '';
+        let snippetCategory = localStorage.getItem('snippetCategory') === 'private' ? 'private' : 'normal';
 
         function normalizeSnippetSearch(value) {
             const text = String(value || '');
@@ -499,10 +507,11 @@
             let matches = 0;
             const rows = Array.from(list.querySelectorAll('[data-snippet-row]'));
             rows.forEach(row => {
+                const categoryMatches = (snippetCategory === 'private') === (row.dataset.private === '1');
                 const title = row.dataset.title || '';
                 const content = row.querySelector('[data-snippet-full]')?.textContent || '';
                 const haystack = normalizeSnippetSearch(`${title}\n${content}`);
-                const matched = terms.every(term => haystack.includes(term));
+                const matched = categoryMatches && terms.every(term => haystack.includes(term));
                 row.hidden = !matched;
                 if (matched) matches++;
             });
@@ -512,7 +521,34 @@
             if (count) count.textContent = terms.length ? `${matches} 条` : '';
             if (clear) clear.classList.toggle('hidden', !terms.length);
             if (clear) clear.classList.toggle('flex', Boolean(terms.length));
-            if (empty) empty.classList.toggle('hidden', !terms.length || matches > 0);
+            if (empty) {
+                empty.textContent = terms.length ? '没有找到匹配的文字' : (snippetCategory === 'private' ? '暂无私卡片' : '暂无普通卡片');
+                empty.classList.toggle('hidden', matches > 0);
+            }
+        }
+
+        function initializeSnippetCategoryFilter() {
+            const filter = document.getElementById('snippet-category-filter');
+            if (!filter || filter.dataset.initialized === '1') return;
+            filter.dataset.initialized = '1';
+            filter.querySelectorAll('[data-snippet-category]').forEach(button => button.addEventListener('click', () => {
+                snippetCategory = button.dataset.snippetCategory === 'private' ? 'private' : 'normal';
+                localStorage.setItem('snippetCategory', snippetCategory);
+                updateSnippetCategoryFilter();
+                applySnippetSearch();
+            }));
+            updateSnippetCategoryFilter();
+        }
+
+        function updateSnippetCategoryFilter() {
+            document.querySelectorAll('[data-snippet-category]').forEach(button => {
+                const selected = button.dataset.snippetCategory === snippetCategory;
+                button.classList.toggle('bg-mauve', selected);
+                button.classList.toggle('text-crust', selected);
+                button.classList.toggle('bg-base', !selected);
+                button.classList.toggle('text-subtext0', !selected);
+                button.setAttribute('aria-selected', selected ? 'true' : 'false');
+            });
         }
 
         function initializeSnippetSearch() {
@@ -582,6 +618,7 @@
             if (event.key === 'Enter') settingsSaveButton.click();
         });
         renderSnippetPreviews();
+        initializeSnippetCategoryFilter();
         initializeSnippetSearch();
 
         // Reset the New Item modal
@@ -955,6 +992,17 @@
             finally { button.disabled=false;setTimeout(()=>{localMutationInFlight=Math.max(0,localMutationInFlight-1);},800); }
         }
 
+        async function togglePrivate(id, button) {
+            const row=button.closest('[data-snippet-row]'); button.disabled=true; localMutationInFlight++;
+            try {
+                const desired=row.dataset.private!=='1';
+                const response=await fetch(`/private/${id}`,{method:'POST',headers:{'Accept':'application/json'},body:new URLSearchParams({private:String(desired),expectedRevision:row.dataset.revision||''})});
+                if(!response.ok)throw new Error(await response.text()||`HTTP ${response.status}`);
+                const result=await response.json(); row.remove(); await insertRenderedCard(result.item); applyListSort('snippets-list',true);
+            } catch(error) { alert(`分类切换失败：${error.message}`); }
+            finally { button.disabled=false;setTimeout(()=>{localMutationInFlight=Math.max(0,localMutationInFlight-1);},800); }
+        }
+
         // View Snippet Modal Logic
         const viewSnippetModal = document.getElementById('view-snippet-modal');
         const viewModalBackdrop = document.getElementById('view-modal-backdrop');
@@ -986,17 +1034,17 @@
 
         // New form submission with progress
         const newItemForm = document.getElementById('new-item-form');
-        async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const snapshot=Number(response.headers.get('X-Content-Sequence'));const html=await response.text();if(Number.isFinite(snapshot)&&lastEventSequence!==null&&lastEventSequence>snapshot){setTimeout(()=>refreshContentSections().catch(()=>{}),150);return;}const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});if(Number.isFinite(snapshot))lastEventSequence=Math.max(lastEventSequence??-1,snapshot);initializeSortControls();renderSnippetPreviews();initializeSnippetSearch();}
+        async function refreshContentSections(){const response=await fetch('/',{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);const snapshot=Number(response.headers.get('X-Content-Sequence'));const html=await response.text();if(Number.isFinite(snapshot)&&lastEventSequence!==null&&lastEventSequence>snapshot){setTimeout(()=>refreshContentSections().catch(()=>{}),150);return;}const doc=new DOMParser().parseFromString(html,'text/html');const replacements=doc.querySelectorAll('.content-section');if(!replacements.length)throw new Error('页面内容无效');document.querySelectorAll('.content-section').forEach((section,i)=>{const replacement=replacements[i];if(replacement)section.replaceWith(replacement);});if(Number.isFinite(snapshot))lastEventSequence=Math.max(lastEventSequence??-1,snapshot);initializeSortControls();renderSnippetPreviews();initializeSnippetCategoryFilter();initializeSnippetSearch();}
 
         function safeLinkHref(value){const raw=String(value||'').trim();const match=raw.match(/^([A-Za-z][A-Za-z0-9+.-]*):/);if(!match||/^(javascript|vbscript|data)$/i.test(match[1]))return '#';return raw;}
         function actionButton(icon,title,handler){const button=document.createElement('button');button.className='w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center bg-base hover:bg-surface0 text-subtext0 rounded-full transition-colors';button.title=title;button.innerHTML=`<i class="${icon}"></i>`;button.onclick=event=>{event.stopPropagation();handler(button);};return button;}
         function itemUnix(value){const parsed=Date.parse(value);return Number.isFinite(parsed)?Math.floor(parsed/1000):Math.floor(Date.now()/1000);}
         function createSnippetCard(item){
-            const row=document.createElement('div');row.dataset.snippetRow='';row.dataset.snippetId=item.id;row.dataset.revision=item.revision||0;row.dataset.favorite=item.favorite?'1':'0';row.dataset.created=itemUnix(item.createdAt);row.dataset.modified=itemUnix(item.modifiedAt);row.dataset.title=item.filename||'';row.className='bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative';
+            const row=document.createElement('div');row.dataset.snippetRow='';row.dataset.snippetId=item.id;row.dataset.revision=item.revision||0;row.dataset.favorite=item.favorite?'1':'0';row.dataset.private=item.private?'1':'0';row.dataset.created=itemUnix(item.createdAt);row.dataset.modified=itemUnix(item.modifiedAt);row.dataset.title=item.filename||'';row.className='bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300 relative';
             const heading=document.createElement('div');heading.className='flex items-start justify-between gap-2 mb-2';const title=document.createElement('div');title.className='font-semibold text-text break-all min-w-0';title.textContent=item.filename||'';heading.appendChild(title);
             const actions=document.createElement('div');actions.className='flex items-center gap-0 sm:gap-1 flex-shrink-0';actions.append(actionButton('fas fa-i-cursor','重命名',()=>showRenameModal(item.id,item.filename)),actionButton('fas fa-pen','编辑',()=>showEditForm(item.id,item.filename)),actionButton('fas fa-copy','复制',button=>copyToClipboard(item.content||'',button)),actionButton('fas fa-trash','删除',button=>deleteItem(item.id,button)));heading.appendChild(actions);
             const content=document.createElement('div');content.dataset.snippetContent='';content.className='w-full whitespace-pre-wrap break-all text-subtext0';const full=document.createElement('div');full.dataset.snippetFull='';full.className='hidden';full.textContent=item.content||'';
-            const favorite=document.createElement('button');favorite.className=`absolute right-3 bottom-2 w-8 h-8 flex items-center justify-center hover:bg-surface0 ${item.favorite?'text-yellow':'text-overlay1'} rounded-full transition-colors`;favorite.title=item.favorite?'取消收藏':'收藏';favorite.innerHTML=`<i class="${item.favorite?'fas':'far'} fa-star"></i>`;favorite.onclick=event=>{event.stopPropagation();toggleFavorite(item.id,favorite);};row.append(heading,content,full,favorite);return row;
+            const footer=document.createElement('div');footer.className='absolute right-3 bottom-2 flex items-center gap-0';const privateButton=document.createElement('button');privateButton.className=`w-8 h-8 flex items-center justify-center hover:bg-surface0 ${item.private?'text-teal':'text-overlay1'} rounded-full transition-colors`;privateButton.title=item.private?'移到普通':'移到私';privateButton.innerHTML=`<i class="fas ${item.private?'fa-lock':'fa-lock-open'}"></i>`;privateButton.onclick=event=>{event.stopPropagation();togglePrivate(item.id,privateButton);};const favorite=document.createElement('button');favorite.className=`w-8 h-8 flex items-center justify-center hover:bg-surface0 ${item.favorite?'text-yellow':'text-overlay1'} rounded-full transition-colors`;favorite.title=item.favorite?'取消收藏':'收藏';favorite.innerHTML=`<i class="${item.favorite?'fas':'far'} fa-star"></i>`;favorite.onclick=event=>{event.stopPropagation();toggleFavorite(item.id,favorite);};footer.append(privateButton,favorite);row.append(heading,content,full,footer);return row;
         }
         function createLinkCard(item){
             const row=document.createElement('div');row.dataset.linkRow='';row.dataset.linkId=item.id;row.dataset.revision=item.revision||0;row.dataset.created=itemUnix(item.createdAt);row.dataset.modified=itemUnix(item.modifiedAt);row.dataset.title=item.filename||'';row.className='link-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300';

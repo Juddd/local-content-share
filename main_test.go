@@ -82,6 +82,25 @@ func TestIndexUsesLocalStructuredCardInsertion(t *testing.T) {
 	}
 }
 
+func TestSnippetTemplateIncludesCategoryControls(t *testing.T) {
+	raw, err := content.ReadFile("templates/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	for _, marker := range []string{
+		`data-snippet-category="normal"`,
+		`data-snippet-category="private"`,
+		`data-private=`,
+		`togglePrivate`,
+		`/private/`,
+	} {
+		if !strings.Contains(source, marker) {
+			t.Fatalf("snippet category integration is missing %q", marker)
+		}
+	}
+}
+
 func TestSnippetSearchFiltersExistingAndRealtimeCards(t *testing.T) {
 	raw, err := content.ReadFile("templates/index.html")
 	if err != nil {
