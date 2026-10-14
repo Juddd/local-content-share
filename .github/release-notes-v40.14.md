@@ -1,4 +1,3 @@
-warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 # Local Content Share v40.14
 
 - 修复网页端文件重命名成功后误报“不支持的卡片类型”的问题。
