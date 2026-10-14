@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 {{define "section-sort"}}
 <div class="relative section-sort" data-list="{{.}}">
     <button type="button" class="section-sort-button flex items-center gap-2 px-3 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors" title="排序"><i class="fas fa-arrow-down-wide-short text-subtext0"></i><span class="section-sort-text font-medium text-sm text-subtext0">创建时间 ↓</span></button>
@@ -337,7 +338,6 @@
         <div id="modal-backdrop" class="absolute inset-0"></div>
         <div class="bg-crust rounded-3xl p-4 sm:p-6 w-full max-w-3xl max-h-[88vh] overflow-y-auto z-10">
             <form id="new-item-form" action="/submit" method="POST" enctype="multipart/form-data">
-                <input type="hidden" name="expiry" id="expiryValue" value="Never">
                 <div id="file-source-tabs" class="grid grid-cols-2 gap-2 mb-4 hidden"><button type="button" id="source-upload" class="py-2 rounded-xl bg-blue text-crust font-semibold">上传文件</button><button type="button" id="source-url" class="py-2 rounded-xl bg-base text-subtext0">从 URL 下载</button></div>
                 <div id="upload-source-panel" class="mb-4">
                     <label for="file-upload" class="flex flex-col items-center justify-center w-full h-32 border-2 border-surface0 border-dashed rounded-2xl cursor-pointer bg-base hover:bg-surface0 transition-all">
@@ -361,10 +361,9 @@
                 </div>
                 <p id="progress-status" class="hidden text-xs text-subtext0 -mt-2 mb-3"></p>
                 <div class="grid grid-cols-3 gap-3 mt-3">
-                    <button type="button" id="expiry-button" class="flex items-center justify-center gap-2 py-2 bg-base hover:bg-surface0 rounded-xl cursor-pointer transition-colors">
-                        <i class="fas fa-clock text-subtext0"></i>
-                        <span id="expiry-text" class="font-medium text-sm text-subtext0">永不过期</span>
-                    </button>
+                    <select name="expiry" id="expiryValue" aria-label="过期时间" class="w-full min-w-0 bg-base px-3 py-2 text-subtext0 text-sm rounded-xl focus:outline-none focus:ring-2 focus:ring-blue">
+                        <option value="Never">永不过期</option>
+                    </select>
                     <button type="button" id="cancel-button" class="py-2 bg-base hover:bg-surface0 text-subtext0 rounded-xl transition-colors font-medium text-sm">取消</button>
                     <button type="submit" id="new-item-submit" class="py-2 bg-blue hover:bg-sapphire text-crust font-semibold rounded-xl transition-colors text-sm">提交</button>
                 </div>
@@ -630,6 +629,7 @@
             form.action = '/submit';
             document.getElementById('new-item-submit').textContent = '提交';
             form.reset();
+            previousExpiryValue = expiryValueInput.value;
             form.querySelector('[name="name"]').disabled = false;
             fileInput.parentElement.parentElement.style.display = 'block';
             fileInput.value = null;
@@ -728,28 +728,42 @@
             }
         });
 
-        // Expiry cycle logic
+        // Expiry selector logic
         let expiryOptions = []; // populated from backend
-        const expiryButton = document.getElementById('expiry-button');
-        const expiryText = document.getElementById('expiry-text');
+        let previousExpiryValue = 'Never';
+        let expiryInitialized = false;
         const expiryValueInput = document.getElementById('expiryValue');
         const expiryLabels = { Never: '永不过期', Custom: '自定义' };
         const formatExpiry = value => expiryLabels[value] || value;
-        expiryButton.addEventListener('click', () => {
-            if (expiryOptions.length === 0) return;
-            const currentIndex = expiryOptions.indexOf(expiryValueInput.value);
-            const nextIndex = (currentIndex === -1) ? 0 : (currentIndex + 1) % expiryOptions.length;
-            const newValue = expiryOptions[nextIndex];
-            if (newValue === "Custom") {
-                const customValue = prompt("请输入自定义过期时间（例如：1h、30m、2d、1w、1M、1y）：");
-                if (customValue) {
-                    expiryText.innerText = customValue;
-                    expiryValueInput.value = customValue;
-                }
-            } else {
-                expiryText.innerText = formatExpiry(newValue);
-                expiryValueInput.value = newValue;
+        function setExpiryOptions(options) {
+            const values = Array.isArray(options) && options.length > 0 ? options : ['Never'];
+            expiryOptions = values.slice();
+            const selectedValue = expiryInitialized ? expiryValueInput.value : '';
+            expiryValueInput.replaceChildren(...values.map(value => new Option(formatExpiry(value), value)));
+            expiryValueInput.value = values.includes(selectedValue) ? selectedValue : values[0];
+            previousExpiryValue = expiryValueInput.value;
+            expiryInitialized = true;
+        }
+        expiryValueInput.addEventListener('change', () => {
+            if (expiryValueInput.value !== 'Custom') {
+                previousExpiryValue = expiryValueInput.value;
+                return;
             }
+            const customValue = prompt('请输入自定义过期时间（例如：1h、30m、2d、1w、1M、1y）：', '');
+            if (!customValue || !customValue.trim()) {
+                expiryValueInput.value = previousExpiryValue;
+                return;
+            }
+            const value = customValue.trim();
+            const existingOption = Array.from(expiryValueInput.options).find(option => option.value === value);
+            if (!existingOption) {
+                const customOption = new Option(value, value);
+                const customChoice = Array.from(expiryValueInput.options).find(option => option.value === 'Custom');
+                if (customChoice) expiryValueInput.insertBefore(customOption, customChoice);
+                else expiryValueInput.add(customOption);
+            }
+            expiryValueInput.value = value;
+            previousExpiryValue = value;
         });
 
         const sortLabels = { created: '创建时间', modified: '修改时间', title: '标题字典序', size: '文件大小' };
@@ -769,9 +783,7 @@
         document.addEventListener('DOMContentLoaded', function() {
             fetch('/getExpiryOptions').then(response => response.json()).then(options => {
                 if (options && options.length > 0) {
-                    expiryOptions = options;
-                    expiryText.innerText = formatExpiry(expiryOptions[0]);
-                    expiryValueInput.value = expiryOptions[0];
+                    setExpiryOptions(options);
                 }
             }).catch(error => console.error('Error fetching expiry options:', error));
             document.querySelectorAll('.section-sort').forEach(sortControl => {
@@ -1054,6 +1066,11 @@
         }
         async function insertRenderedCard(item) {
             if (!item || !item.type) throw new Error('服务器未返回新卡片');
+            if (item.type === 'file') {
+                insertFileCard(item);
+                applyListSort('files-list', true);
+                return;
+            }
             const target=document.getElementById(item.type==='text'?'snippets-list':'links-list');
             if(!target||(item.type!=='text'&&item.type!=='link'))throw new Error('不支持的卡片类型');
             const duplicate = Array.from(target.querySelectorAll(item.type === 'text' ? '[data-snippet-row]' : '[data-link-row]')).some(row => (item.type === 'text' ? row.dataset.snippetId : row.dataset.linkId) === item.id);

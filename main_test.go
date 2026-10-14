@@ -1,3 +1,4 @@
+warning: /bin/sh: setlocale: LC_ALL: cannot change locale (C.UTF-8)
 package main
 
 import (
@@ -79,6 +80,30 @@ func TestIndexUsesLocalStructuredCardInsertion(t *testing.T) {
 	}
 	if !strings.Contains(insert, "createSnippetCard(item)") {
 		t.Fatal("structured snippet card builder is not used")
+	}
+	if !strings.Contains(insert, "if (item.type === 'file')") ||
+		!strings.Contains(insert, "insertFileCard(item)") ||
+		!strings.Contains(insert, "applyListSort('files-list', true)") {
+		t.Fatal("structured file card insertion is not handled")
+	}
+}
+
+func TestNewItemUsesExpiryDropdown(t *testing.T) {
+	raw, err := content.ReadFile("templates/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	if !strings.Contains(source, `<select name="expiry" id="expiryValue"`) {
+		t.Fatal("new item form is missing the expiry dropdown")
+	}
+	if strings.Contains(source, `id="expiry-button"`) || strings.Contains(source, `id="expiry-text"`) {
+		t.Fatal("expiry cycle button was not removed")
+	}
+	for _, marker := range []string{"function setExpiryOptions(options)", "expiryValueInput.addEventListener('change'", "Custom: '自定义'", "expiryValueInput.insertBefore(customOption, customChoice)"} {
+		if !strings.Contains(source, marker) {
+			t.Fatalf("expiry dropdown integration is missing %q", marker)
+		}
 	}
 }
 
