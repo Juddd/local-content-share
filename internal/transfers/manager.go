@@ -312,12 +312,19 @@ func (m *Manager) Download(ctx context.Context, source *url.URL, requestedName, 
 	if response.ContentLength > m.maxDownload {
 		return File{}, fmt.Errorf("remote file exceeds 8 GB")
 	}
+	automaticName := strings.TrimSpace(requestedName) == ""
 	name := DownloadFilename(response, source, requestedName)
+	if automaticName {
+		// A remote server can expose a misleading URL or filename (for
+		// example, a PDF behind a .txt endpoint). Use its declared MIME type
+		// before reserving the name so progress updates show the final suffix.
+		name = filenameWithExtension(name, extensionForContentType(response.Header.Get("Content-Type")))
+	}
 	unique := m.reserve(name)
 	if observer != nil {
 		observer(DownloadUpdate{Filename: unique, Total: response.ContentLength})
 	}
-	return m.saveReaderAs(&progressReader{reader: response.Body, total: response.ContentLength, limit: m.maxDownload, filename: unique, observer: observer}, unique, expiry, "", m.maxDownload)
+	return m.saveReaderAsWithOptions(&progressReader{reader: response.Body, total: response.ContentLength, limit: m.maxDownload, filename: unique, observer: observer}, unique, expiry, "", m.maxDownload, automaticName, response.Header.Get("Content-Type"))
 }
 
 func (m *Manager) saveReader(reader io.Reader, name, expiry, preferredID string, limit int64) (File, error) {
@@ -326,6 +333,10 @@ func (m *Manager) saveReader(reader io.Reader, name, expiry, preferredID string,
 }
 
 func (m *Manager) saveReaderAs(reader io.Reader, unique, expiry, preferredID string, limit int64) (File, error) {
+	return m.saveReaderAsWithOptions(reader, unique, expiry, preferredID, limit, false, "")
+}
+
+func (m *Manager) saveReaderAsWithOptions(reader io.Reader, unique, expiry, preferredID string, limit int64, correctAutomaticExtension bool, contentType string) (File, error) {
 	releaseReservation := true
 	defer func() {
 		if releaseReservation {
@@ -358,10 +369,18 @@ func (m *Manager) saveReaderAs(reader io.Reader, unique, expiry, preferredID str
 	if err = temp.Close(); err != nil {
 		return File{}, err
 	}
-	if filepath.Ext(unique) == "" {
-		if extension := DetectedExtension(tempName); extension != "" {
-			unique = m.replaceReservation(unique, unique+extension)
+	detectedExtension := ""
+	if correctAutomaticExtension {
+		detectedExtension = DetectedExtension(tempName)
+		if detectedExtension == "" {
+			detectedExtension = extensionForContentType(contentType)
 		}
+	}
+	if detectedExtension == "" && filepath.Ext(unique) == "" {
+		detectedExtension = DetectedExtension(tempName)
+	}
+	if detectedExtension != "" && (filepath.Ext(unique) == "" || (correctAutomaticExtension && !sameFilenameExtension(unique, detectedExtension))) {
+		unique = m.replaceReservation(unique, filenameWithExtension(unique, detectedExtension))
 	}
 	storage := filepath.ToSlash(filepath.Join("files", unique))
 	final := filepath.Join(m.files, unique)
@@ -529,6 +548,47 @@ func DownloadFilename(response *http.Response, source *url.URL, requested string
 		return name
 	}
 	return "download-" + time.Now().Format("20060102-150405")
+}
+
+func filenameWithExtension(name, extension string) string {
+	if extension == "" {
+		return name
+	}
+	if filepath.Ext(name) == "" {
+		return name + extension
+	}
+	return strings.TrimSuffix(name, filepath.Ext(name)) + extension
+}
+
+func sameFilenameExtension(name, extension string) bool {
+	current := strings.ToLower(filepath.Ext(name))
+	detected := strings.ToLower(extension)
+	if current == detected {
+		return true
+	}
+	return (current == ".jpg" || current == ".jpeg") && (detected == ".jpg" || detected == ".jpeg")
+}
+
+func extensionForContentType(value string) string {
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		mediaType = strings.TrimSpace(strings.SplitN(value, ";", 2)[0])
+	}
+	switch strings.ToLower(mediaType) {
+	case "application/pdf":
+		return ".pdf"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/bmp":
+		return ".bmp"
+	}
+	return ""
 }
 func UniqueFilename(baseDir, baseName string) string {
 	name := sanitizeFilename(baseName)

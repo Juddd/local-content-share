@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -139,6 +140,36 @@ func TestDownloadReportsPreparedAndProgressThenPublishes(t *testing.T) {
 	last := updates[len(updates)-1]
 	if last.Received != 12 || last.Total != 12 {
 		t.Fatalf("missing final progress: %#v", updates)
+	}
+}
+
+func TestDownloadCorrectsAutomaticExtensionFromPDFResponse(t *testing.T) {
+	root := t.TempDir()
+	manager, err := NewManager(root, 1<<20, 1<<20, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdf := []byte("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Header().Set("Content-Disposition", `attachment; filename="remote.txt"`)
+		w.Header().Set("Content-Length", fmt.Sprint(len(pdf)))
+		_, _ = w.Write(pdf)
+	}))
+	defer server.Close()
+	source, _ := url.Parse(server.URL + "/remote.txt")
+	file, err := manager.Download(context.Background(), source, "", "Never", server.Client().Transport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Filename != "remote.pdf" {
+		t.Fatalf("automatic filename did not follow PDF content: %q", file.Filename)
+	}
+	if _, err := os.Stat(filepath.Join(root, "files", "remote.txt")); !os.IsNotExist(err) {
+		t.Fatalf("misleading .txt file was published: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "files", "remote.pdf")); err != nil || !bytes.Equal(data, pdf) {
+		t.Fatalf("PDF payload was not saved intact: %v", err)
 	}
 }
 

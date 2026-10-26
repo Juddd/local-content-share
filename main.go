@@ -1367,8 +1367,11 @@ func main() {
 		}
 		defer file.Close()
 
+		// Resolve the stable ID before choosing the download name. Stable IDs
+		// have no extension, while the stored filename does.
+		baseFilename := filepath.Base(filePath)
 		// Brute force method to determine content type
-		ext := strings.ToLower(filepath.Ext(filename))
+		ext := strings.ToLower(filepath.Ext(baseFilename))
 		var contentType string
 		switch ext {
 		case ".pdf":
@@ -1395,7 +1398,6 @@ func main() {
 				return
 			}
 		}
-		baseFilename := filepath.Base(filename)
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": baseFilename}))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -1410,6 +1412,9 @@ func main() {
 			http.Error(w, "Invalid file", http.StatusBadRequest)
 			return
 		}
+		// The public view URL uses a stable ID, so browsers otherwise lose the
+		// original extension when the user saves the displayed file.
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filepath.Base(filePath)}))
 		http.ServeFile(w, r, filePath)
 		log.Printf("Served %s for viewing\n", filename)
 	})

@@ -277,7 +277,7 @@
                 <div class="flex items-center justify-center gap-3 mb-4"><h2 class="text-2xl font-semibold text-text">文件</h2>{{template "section-sort" "files-list"}}</div>
                 <div id="files-list" class="responsive-card-grid">
                     {{range .}}{{if eq .Type "file"}}
-                    <div data-file-row data-file-id="{{.ID}}" data-revision="{{.Revision}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="file-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
+                    <div data-file-row data-file-id="{{.ID}}" data-file-name="{{.Filename}}" data-revision="{{.Revision}}" data-created="{{.CreatedAt.Unix}}" data-modified="{{.ModifiedAt.Unix}}" data-title="{{.Filename}}" data-size="{{.Size}}" class="file-card flex bg-base border border-transparent hover:border-surface1 rounded-3xl px-4 py-3 transition-colors duration-300">
                         <div class="flex items-center gap-3 min-w-0">
                             <img class="file-card-thumb" src="/thumbnail/{{.ID}}" alt="" loading="lazy" onerror="this.style.display='none'">
                             <div class="file-card-info"><div class="file-card-name font-medium text-text mr-2" title="添加时间：{{.CreatedAt.Format "2006-01-02 15:04:05"}}">{{.Filename}}</div></div>
@@ -1110,6 +1110,7 @@
             const row = document.createElement('div');
             row.dataset.fileRow = '';
             row.dataset.fileId = item.id;
+            row.dataset.fileName = item.filename || '';
             row.dataset.revision = item.revision || 0;
             row.dataset.created = Math.floor(Date.parse(item.createdAt) / 1000) || Math.floor(Date.now() / 1000);
             row.dataset.modified = Math.floor(Date.parse(item.modifiedAt) / 1000) || row.dataset.created;
@@ -1208,7 +1209,8 @@
             if (!link) return;
             event.preventDefault();
             const controller = new AbortController();
-            const requestedName=decodeURIComponent(link.href.split('/').pop());
+            const fileRow=link.closest('[data-file-row]');
+            const requestedName=fileRow?.dataset.fileName || decodeURIComponent(link.href.split('/').pop());
             const fileHandlePromise=window.showSaveFilePicker?window.showSaveFilePicker({suggestedName:requestedName}):null;
             activeTransfer = {controller};
             newItemModal.classList.remove('hidden'); sourceTabs.classList.add('hidden');
