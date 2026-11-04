@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -52,6 +53,89 @@ type Entry struct {
 type imagePreviewData struct {
 	Title    string
 	ImageURL string
+}
+
+const snippetTitleStoragePrefix = "~lcs-title-v1~"
+
+func validateSnippetTitle(title string) (string, error) {
+	title = strings.TrimSpace(title)
+	if title == "" || title == "." || title == ".." {
+		return "", fmt.Errorf("title cannot be empty or a path component")
+	}
+	if strings.IndexFunc(title, unicode.IsControl) >= 0 {
+		return "", fmt.Errorf("title cannot contain control characters")
+	}
+	return title, nil
+}
+
+func snippetStorageName(title string) string {
+	if strings.ContainsAny(title, `/\\`) || strings.HasPrefix(title, snippetTitleStoragePrefix) {
+		return snippetTitleStoragePrefix + base64.RawURLEncoding.EncodeToString([]byte(title))
+	}
+	return title
+}
+
+func snippetDisplayTitle(storageName string) string {
+	encoded, ok := strings.CutPrefix(storageName, snippetTitleStoragePrefix)
+	if !ok {
+		return storageName
+	}
+	title, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return storageName
+	}
+	return string(title)
+}
+
+func uniqueSnippetStorageName(baseDir, title string) (string, string, error) {
+	title, err := validateSnippetTitle(title)
+	if err != nil {
+		return "", "", err
+	}
+	for attempt := 0; ; attempt++ {
+		candidateTitle := title
+		if attempt > 0 {
+			candidateTitle = fmt.Sprintf("%04d-%s", rand.Intn(10000), title)
+		}
+		candidateStorageName := snippetStorageName(candidateTitle)
+		if len(candidateStorageName) > 255 {
+			return "", "", fmt.Errorf("title is too long")
+		}
+		_, err = os.Stat(filepath.Join(baseDir, candidateStorageName))
+		if os.IsNotExist(err) {
+			return candidateTitle, candidateStorageName, nil
+		}
+		if err != nil {
+			return "", "", err
+		}
+	}
+}
+
+func uniqueSnippetStorageNameForEdit(baseDir, title, currentStorageName string) (string, string, error) {
+	title, err := validateSnippetTitle(title)
+	if err != nil {
+		return "", "", err
+	}
+	for attempt := 0; ; attempt++ {
+		candidateTitle := title
+		if attempt > 0 {
+			candidateTitle = fmt.Sprintf("%04d-%s", rand.Intn(10000), title)
+		}
+		candidateStorageName := snippetStorageName(candidateTitle)
+		if len(candidateStorageName) > 255 {
+			return "", "", fmt.Errorf("title is too long")
+		}
+		if candidateStorageName == currentStorageName {
+			return candidateTitle, candidateStorageName, nil
+		}
+		_, err = os.Stat(filepath.Join(baseDir, candidateStorageName))
+		if os.IsNotExist(err) {
+			return candidateTitle, candidateStorageName, nil
+		}
+		if err != nil {
+			return "", "", err
+		}
+	}
 }
 
 type DownloadTask struct {
@@ -536,7 +620,7 @@ func contentEntry(id string) (*Entry, error) {
 		if err != nil {
 			return nil, err
 		}
-		return stableEntry(&Entry{ID: id, Type: "text", Filename: filepath.Base(id), Content: string(body), CreatedAt: info.ModTime(), ModifiedAt: info.ModTime(), Size: info.Size()}), nil
+		return stableEntry(&Entry{ID: id, Type: "text", Filename: snippetDisplayTitle(filepath.Base(id)), Content: string(body), CreatedAt: info.ModTime(), ModifiedAt: info.ModTime(), Size: info.Size()}), nil
 	}
 	return nil, fmt.Errorf("unsupported content id")
 }
@@ -685,7 +769,7 @@ func main() {
 				ID:         id,
 				Type:       "text",
 				Content:    string(data),
-				Filename:   file.Name(),
+				Filename:   snippetDisplayTitle(file.Name()),
 				CreatedAt:  info.ModTime(),
 				ModifiedAt: info.ModTime(),
 			})
@@ -779,7 +863,7 @@ func main() {
 				continue
 			}
 			id := filepath.Join("text", file.Name())
-			entries = append(entries, Entry{ID: id, Type: "text", Content: string(data), Filename: file.Name(), CreatedAt: info.ModTime(), ModifiedAt: info.ModTime()})
+			entries = append(entries, Entry{ID: id, Type: "text", Content: string(data), Filename: snippetDisplayTitle(file.Name()), CreatedAt: info.ModTime(), ModifiedAt: info.ModTime()})
 		}
 		files, _ := os.ReadDir(filepath.Join("data", "files"))
 		for _, file := range files {
@@ -1071,8 +1155,12 @@ func main() {
 					chinaStandardTime := time.FixedZone("China Standard Time", 8*60*60)
 					filename = time.Now().In(chinaStandardTime).Format("01／02 15-04-05")
 				}
-				uniqueFileName := generateUniqueFilename("data/text", filename)
-				err := atomicWriteFile(filepath.Join("data/text", uniqueFileName), []byte(content), 0644)
+				displayName, uniqueFileName, err := uniqueSnippetStorageName("data/text", filename)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				err = atomicWriteFile(filepath.Join("data/text", uniqueFileName), []byte(content), 0644)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
@@ -1082,9 +1170,9 @@ func main() {
 					http.Error(w, err.Error(), 500)
 					return
 				}
-				createdName = uniqueFileName
+				createdName = displayName
 				now := time.Now()
-				createdItem = stableEntry(&Entry{ID: filepath.Join("text", uniqueFileName), Type: "text", Content: content, Filename: uniqueFileName, CreatedAt: now, ModifiedAt: now})
+				createdItem = stableEntry(&Entry{ID: filepath.Join("text", uniqueFileName), Type: "text", Content: content, Filename: displayName, CreatedAt: now, ModifiedAt: now})
 				if expiryOption != "Never" {
 					fileID := filepath.Join("text", uniqueFileName)
 					expirationTracker.SetExpiration(fileID, expiryOption)
@@ -1285,7 +1373,17 @@ func main() {
 			return
 		}
 		baseDir := filepath.Dir(oldFullPath)
-		newName = generateUniqueFilename(baseDir, newName)
+		displayName := newName
+		if strings.HasPrefix(oldPath, "text/") {
+			displayName, newName, err = uniqueSnippetStorageName(baseDir, newName)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		} else {
+			newName = generateUniqueFilename(baseDir, newName)
+			displayName = newName
+		}
 
 		// Get the new full path
 		newPath := filepath.Join(baseDir, newName)
@@ -1328,7 +1426,7 @@ func main() {
 			notifyContentChange()
 		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
-		log.Printf("Renamed %s to %s\n", oldPath, newName)
+		log.Printf("Renamed %s to %s\n", oldPath, displayName)
 	})
 
 	http.HandleFunc("/raw/", func(w http.ResponseWriter, r *http.Request) {
@@ -1654,19 +1752,53 @@ func main() {
 			http.Error(w, "Content cannot be empty", http.StatusBadRequest)
 			return
 		}
+		oldStorage := id
+		newStorage := oldStorage
+		newTitle := r.FormValue("name")
+		_, titleProvided := r.Form["name"]
+		if titleProvided {
+			if strings.TrimSpace(newTitle) == "" {
+				http.Error(w, "Title cannot be empty", http.StatusBadRequest)
+				return
+			}
+			_, storageName, titleErr := uniqueSnippetStorageNameForEdit(filepath.Dir(filePath), newTitle, filepath.Base(oldStorage))
+			if titleErr != nil {
+				http.Error(w, titleErr.Error(), http.StatusBadRequest)
+				return
+			}
+			newStorage = filepath.ToSlash(filepath.Join("text", storageName))
+		}
+		newFilePath, pathErr := contentFilePath(newStorage, "text")
+		if pathErr != nil {
+			http.Error(w, pathErr.Error(), http.StatusBadRequest)
+			return
+		}
 		previousContent, err := os.ReadFile(filePath)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		err = atomicWriteFile(filePath, []byte(content), 0644)
+		moved := newFilePath != filePath
+		if moved {
+			if err = os.Rename(filePath, newFilePath); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		err = atomicWriteFile(newFilePath, []byte(content), 0644)
 		if err != nil {
+			if moved {
+				_ = os.Rename(newFilePath, filePath)
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		record, mutationErr := contentLifecycle.Edit(requestedID, expectedRevision(r))
+		record, mutationErr := contentLifecycle.RenameAndEdit(requestedID, newStorage, expectedRevision(r))
 		if mutationErr != nil {
-			_ = atomicWriteFile(filePath, previousContent, 0644)
+			_ = atomicWriteFile(newFilePath, previousContent, 0644)
+			if moved {
+				_ = os.Rename(newFilePath, filePath)
+			}
 			if errors.Is(mutationErr, errRevisionConflict) {
 				writeRevisionConflict(w, record)
 				return
@@ -1674,7 +1806,16 @@ func main() {
 			http.Error(w, mutationErr.Error(), 500)
 			return
 		}
-		if entry, entryErr := contentEntry(id); entryErr == nil {
+		if oldStorage != record.Storage && expirationTracker != nil {
+			expirationTracker.mu.Lock()
+			if expiryTime, hasExpiry := expirationTracker.Expirations[oldStorage]; hasExpiry {
+				delete(expirationTracker.Expirations, oldStorage)
+				expirationTracker.Expirations[record.Storage] = expiryTime
+				expirationTracker.saveToFile()
+			}
+			expirationTracker.mu.Unlock()
+		}
+		if entry, entryErr := contentEntry(record.Storage); entryErr == nil {
 			notifyContentItem("updated", entry)
 			if strings.Contains(r.Header.Get("Accept"), "application/json") {
 				writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "item": entry})
@@ -1684,7 +1825,7 @@ func main() {
 			notifyContentChange()
 		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
-		log.Printf("Edited %s\n", id)
+		log.Printf("Edited %s\n", snippetDisplayTitle(filepath.Base(record.Storage)))
 	})
 
 	// SSE Updates for content refresh

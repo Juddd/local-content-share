@@ -35,6 +35,101 @@ func TestIndexTemplateRendersDocument(t *testing.T) {
 	}
 }
 
+func TestSnippetTitlePreservesPathLikeTitleAcrossStorage(t *testing.T) {
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldLifecycle := contentLifecycle
+	temp := t.TempDir()
+	if err = os.Chdir(temp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		contentLifecycle = oldLifecycle
+		_ = os.Chdir(oldDir)
+	})
+	if err = os.MkdirAll(filepath.Join("data", "text"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err = initContentLifecycle("data"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "~/.config/kitty/kitty.conf"
+	displayName, storageName, err := uniqueSnippetStorageName(filepath.Join("data", "text"), want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if displayName != want || strings.ContainsAny(storageName, `/\\`) {
+		t.Fatalf("title was not safely separated from its storage name: display=%q storage=%q", displayName, storageName)
+	}
+	if err = os.WriteFile(filepath.Join("data", "text", storageName), []byte("kitty config"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = contentLifecycle.Add(filepath.Join("text", storageName), ""); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := contentEntry(filepath.Join("text", storageName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Filename != want || entry.Content != "kitty config" {
+		t.Fatalf("path-like title did not round-trip: %#v", entry)
+	}
+}
+
+func TestSnippetEditKeepsPathLikeTitleAndAllowsRenameInPlace(t *testing.T) {
+	temp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(temp, "text"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	oldTitle := "old title"
+	_, oldStorage, err := uniqueSnippetStorageName(filepath.Join(temp, "text"), oldTitle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(temp, "text", oldStorage), []byte("before"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	newTitle := "~/.config/kitty/kitty.conf"
+	displayName, newStorage, err := uniqueSnippetStorageNameForEdit(filepath.Join(temp, "text"), newTitle, oldStorage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if displayName != newTitle || strings.ContainsAny(newStorage, `/\\`) {
+		t.Fatalf("path-like title was not safely encoded: display=%q storage=%q", displayName, newStorage)
+	}
+	if _, _, err = uniqueSnippetStorageNameForEdit(filepath.Join(temp, "text"), oldTitle, oldStorage); err != nil {
+		t.Fatalf("editing without changing title should retain the current storage name: %v", err)
+	}
+
+	raw, err := content.ReadFile("templates/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	start := strings.Index(source, "async function showEditForm(id, filename)")
+	if start < 0 {
+		t.Fatal("snippet edit form function not found")
+	}
+	end := strings.Index(source[start:], "// Copy to clipboard function")
+	if end < 0 {
+		t.Fatal("snippet edit form function boundary not found")
+	}
+	editForm := source[start : start+end]
+	if !strings.Contains(editForm, `form.querySelector('[name="name"]').disabled = false`) {
+		t.Fatal("snippet title field is disabled while editing the body")
+	}
+	serverSource, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(serverSource), "contentLifecycle.RenameAndEdit(requestedID, newStorage, expectedRevision(r))") {
+		t.Fatal("server edit endpoint does not persist title and body together")
+	}
+}
+
 func TestIndexTemplatePreservesCustomLinkHref(t *testing.T) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"previewText":  func(s string, max int) string { return s },

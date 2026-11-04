@@ -204,6 +204,12 @@ func (m *Manager) Rename(value, newStorage string, expected uint64) (Identity, e
 }
 
 func (m *Manager) Edit(value string, expected uint64) (Identity, error) {
+	return m.RenameAndEdit(value, "", expected)
+}
+
+// RenameAndEdit updates the storage mapping and modified timestamp as one
+// metadata mutation. An empty newStorage keeps the current storage path.
+func (m *Manager) RenameAndEdit(value, newStorage string, expected uint64) (Identity, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	record, ok := m.resolvePointerLocked(value)
@@ -215,6 +221,27 @@ func (m *Manager) Edit(value string, expected uint64) (Identity, error) {
 	}
 	previous := m.beginMutationLocked()
 	record, _ = m.resolvePointerLocked(value)
+	oldStorage := record.Storage
+	if newStorage == "" {
+		newStorage = oldStorage
+	}
+	if oldStorage != newStorage {
+		delete(m.data.ByStorage, oldStorage)
+		record.Storage = newStorage
+		m.data.ByStorage[newStorage] = record.ID
+		if times, found := m.data.Times[oldStorage]; found {
+			delete(m.data.Times, oldStorage)
+			m.data.Times[newStorage] = times
+		}
+		if m.data.Favorites[oldStorage] {
+			delete(m.data.Favorites, oldStorage)
+			m.data.Favorites[newStorage] = true
+		}
+		if m.data.Private[oldStorage] {
+			delete(m.data.Private, oldStorage)
+			m.data.Private[newStorage] = true
+		}
+	}
 	times := m.data.Times[record.Storage]
 	if times.CreatedAt.IsZero() {
 		times.CreatedAt = m.now()

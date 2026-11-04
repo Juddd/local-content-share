@@ -861,12 +861,13 @@
         // Edit form logic
         async function showEditForm(id, filename) {
             const response = await fetch(`/raw/${id}`);
+            if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
             const content = await response.text();
             const form = document.getElementById('new-item-form');
             form.action = `/edit/${id}`;
             document.getElementById('new-item-submit').textContent = '保存';
             form.querySelector('[name="name"]').value = filename;
-            form.querySelector('[name="name"]').disabled = true; 
+            form.querySelector('[name="name"]').disabled = false;
             form.querySelector('[name="content"]').value = content;
             form.querySelector('[name="file-upload"]').parentElement.parentElement.style.display = 'none';
             sourceTabs.classList.add('hidden');

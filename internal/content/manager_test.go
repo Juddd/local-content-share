@@ -38,6 +38,42 @@ func TestContentIdentitySurvivesRenameAndRestart(t *testing.T) {
 	}
 }
 
+func TestRenameAndEditPreservesIdentityAndMovesMetadata(t *testing.T) {
+	root := t.TempDir()
+	manager, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := manager.Add("text/original", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalTime := manager.View("text/original", time.Time{}).CreatedAt
+	manager.now = func() time.Time { return time.Unix(500, 0) }
+	original, err = manager.SetFavorite(original.ID, true, original.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err = manager.SetPrivate(original.ID, true, original.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := manager.RenameAndEdit(original.ID, "text/renamed", original.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != original.ID || updated.Storage != "text/renamed" || updated.Revision != original.Revision+1 {
+		t.Fatalf("rename-and-edit did not update item atomically: %#v", updated)
+	}
+	snapshot := manager.View(updated.Storage, time.Time{})
+	if !snapshot.Favorite || !snapshot.Private || !snapshot.CreatedAt.Equal(originalTime) || !snapshot.ModifiedAt.Equal(time.Unix(500, 0)) {
+		t.Fatalf("rename-and-edit lost item metadata: %#v", snapshot)
+	}
+	if _, ok := manager.Resolve("text/original"); ok {
+		t.Fatal("old storage path still resolves")
+	}
+}
+
 func TestContentMutationRejectsStaleRevision(t *testing.T) {
 	manager, _ := NewManager(t.TempDir())
 	record, _ := manager.Add("text/item", "")
