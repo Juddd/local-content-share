@@ -57,7 +57,7 @@ jobs:
         continue-on-error: true
         run: |
           apk=content-transfer-v1.0.72.apk
-          if curl --fail --location --retry 6 --retry-all-errors --retry-delay 5 \
+          if curl --connect-timeout 8 --max-time 30 --fail --location --retry 1 --retry-all-errors --retry-delay 3 \
               -o "$apk" \
               "http://nas.yode.ink:8084/download/files/$apk" \
               && echo "5bca3709970146e8bf9b9ecfff0cd97953c1dac8e96a549f27e4ced73d683668  $apk" | sha256sum --check; then
