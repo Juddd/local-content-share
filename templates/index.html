@@ -1268,11 +1268,14 @@
         let deviceActivityPending = true;
         let lastDeviceActivitySend = 0;
         let deviceLocking = false;
+        let pageSuspended = false;
+        let deviceReconnectTimer;
+        let contentReconnectTimer;
 
         function enterDeviceLock() {
             if (deviceLocking) return;
             deviceLocking = true;
-            if (deviceEvents) deviceEvents.close();
+            stopRealtime();
             // Normal user-opened tabs usually reject window.close(). Schedule
             // the server-gated navigation first so rejection always becomes 404.
             setTimeout(() => location.replace('/'), 180);
@@ -1315,17 +1318,21 @@
         }
 
         function connectDeviceEvents() {
-            if (deviceLocking) return;
-            if (deviceEvents) deviceEvents.close();
-            deviceEvents = new EventSource(`/api/v1/device/events?sessionId=${encodeURIComponent(deviceSessionId)}`);
-            deviceEvents.onmessage = event => {
+            if (document.hidden || pageSuspended || deviceLocking) return;
+            if (deviceEvents && deviceEvents.readyState !== EventSource.CLOSED) return;
+            clearTimeout(deviceReconnectTimer);
+            const stream = new EventSource(`/api/v1/device/events?sessionId=${encodeURIComponent(deviceSessionId)}`);
+            deviceEvents = stream;
+            stream.onmessage = event => {
                 try {
                     if (JSON.parse(event.data).type === 'lock') enterDeviceLock();
                 } catch (_) {}
             };
-            deviceEvents.onerror = () => {
-                deviceEvents.close();
-                setTimeout(() => { if (!deviceLocking) connectDeviceEvents(); }, 2500);
+            stream.onerror = () => {
+                if (deviceEvents !== stream) return;
+                stream.close();
+                deviceEvents = null;
+                deviceReconnectTimer = setTimeout(connectDeviceEvents, 2500);
             };
         }
 
@@ -1346,11 +1353,12 @@
             return document.querySelector(`[data-file-id="${escaped}"], [data-snippet-id="${escaped}"], [data-link-id="${escaped}"]`);
         }
         function connectSSE() {
-            if (evtSource) {
-                evtSource.close();
-            }
-            evtSource = new EventSource("/api/updates" + (lastEventSequence === null ? "" : `?since=${lastEventSequence}`));
-            evtSource.onmessage = function(event) {
+            if (document.hidden || pageSuspended || deviceLocking) return;
+            if (evtSource && evtSource.readyState !== EventSource.CLOSED) return;
+            clearTimeout(contentReconnectTimer);
+            const stream = new EventSource("/api/updates" + (lastEventSequence === null ? "" : `?since=${lastEventSequence}`));
+            evtSource = stream;
+            stream.onmessage = function(event) {
                 if (event.data.startsWith('{')) {
                     try {
                         const change = JSON.parse(event.data);
@@ -1387,30 +1395,52 @@
                     }
                 }
             };
-            evtSource.onerror = function() {
+            stream.onerror = function() {
+                if (evtSource !== stream) return;
                 console.log("SSE connection error. Will attempt to reconnect.");
-                evtSource.close();
-                setTimeout(() => {
-                    if (!document.hidden && evtSource.readyState === EventSource.CLOSED) connectSSE();
-                }, 2000);
+                stream.close();
+                evtSource = null;
+                contentReconnectTimer = setTimeout(connectSSE, 2000);
             };
         }
 
-        // SSE connect aftwr page load
-        window.addEventListener('load', function() {
+        // HTTP/1.1 shares six connections across this origin's tabs. Hidden
+        // pages release both streams; heartbeats still report presence/locks.
+        function stopRealtime() {
+            clearTimeout(contentReconnectTimer);
+            clearTimeout(deviceReconnectTimer);
+            if (evtSource) evtSource.close();
+            if (deviceEvents) deviceEvents.close();
+            evtSource = null;
+            deviceEvents = null;
+        }
+
+        function resumeRealtime() {
             connectSSE();
-            sendDeviceHeartbeat({active: true});
             connectDeviceEvents();
+        }
+
+        window.addEventListener('load', function() {
+            resumeRealtime();
+            sendDeviceHeartbeat({active: true});
             setInterval(() => sendDeviceHeartbeat(), 10000);
         });
         document.addEventListener('visibilitychange', function() {
+            if (document.hidden) stopRealtime();
+            else resumeRealtime();
             sendDeviceHeartbeat({active: !document.hidden});
-            if (!document.hidden && (!evtSource || evtSource.readyState === EventSource.CLOSED)) {
-                console.log("Reconnecting SSE, tab visible");
-                connectSSE();
-            }
         });
-        window.addEventListener('pagehide', () => sendDeviceHeartbeat({gone: true}));
+        window.addEventListener('pagehide', () => {
+            pageSuspended = true;
+            stopRealtime();
+            sendDeviceHeartbeat({gone: true});
+        });
+        window.addEventListener('pageshow', event => {
+            if (!event.persisted) return;
+            pageSuspended = false;
+            resumeRealtime();
+            sendDeviceHeartbeat({active: !document.hidden});
+        });
     </script>
 </body>
 </html>
